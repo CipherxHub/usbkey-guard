@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from . import statewrite
 from .paths import STATE_ROOT, ensure_state_tree
 
 WAL = STATE_ROOT / "journal" / "wal.log"
@@ -121,5 +122,9 @@ class Journal:
             json.dump(state, f, sort_keys=True, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, STATE)
+        try:
+            os.replace(tmp, STATE)
+        except PermissionError as exc:
+            statewrite.discard(tmp)
+            raise statewrite.permission_error(STATE, exc) from exc
         _fsync(STATE)

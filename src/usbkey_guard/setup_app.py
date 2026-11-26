@@ -129,6 +129,15 @@ def install() -> int:
         print("ERROR copying files:", exc)
         return 1
 
+    try:
+        paths.ensure_state_tree()
+        if acl.allow_state_writes(str(config.STATE_ROOT)):
+            print("State folder writable by local users:", config.STATE_ROOT)
+        else:
+            print("State folder kept admin-only (hardened):", config.STATE_ROOT)
+    except OSError as exc:
+        print("WARNING: could not prepare the state folder:", exc)
+
     menu = start_menu_dir()
     menu.mkdir(parents=True, exist_ok=True)
     launcher = menu / "usbkey TUI.bat"
@@ -197,6 +206,28 @@ def uninstall() -> int:
     return 0
 
 
+def repair_permissions() -> int:
+    """Re-grant local users write access to the state folder.
+
+    Needed on installs made before 1.0.6, where files written by SYSTEM were
+    read-only for a normal desktop session and every vault action failed with
+    "Access is denied" on vaults.json.
+    """
+    if not is_admin():
+        print("ERROR: run this as Administrator.")
+        return 1
+    paths.ensure_state_tree()
+    ok = acl.allow_state_writes(str(config.STATE_ROOT))
+    print("State folder:", config.STATE_ROOT)
+    if ok:
+        print("Writable by local users: yes (the TUI now works without elevation)")
+        return 0
+    print("Writable by local users: no")
+    print("If you ran `usbkey-setup harden`, this is expected: only administrators")
+    print("can change vaults then. Otherwise run this from an elevated prompt.")
+    return 1
+
+
 def status() -> int:
     result = subprocess.run(["schtasks", "/query", "/tn", config.TASK_NAME],
                             capture_output=True, text=True)
@@ -207,14 +238,16 @@ def status() -> int:
 def main(argv=None) -> int:
     import argparse
     p = argparse.ArgumentParser(prog="usbkey-setup")
-    p.add_argument("action", choices=["install", "uninstall", "status", "harden"])
+    p.add_argument("action", choices=["install", "uninstall", "status", "harden",
+                                      "repair-permissions"])
     args = p.parse_args(argv)
     if args.action == "harden":
         if not is_admin():
             print("ERROR: run this as Administrator.")
             return 1
         return 0 if harden_state() else 1
-    return {"install": install, "uninstall": uninstall, "status": status}[args.action]()
+    return {"install": install, "uninstall": uninstall, "status": status,
+            "repair-permissions": repair_permissions}[args.action]()
 
 
 if __name__ == "__main__":

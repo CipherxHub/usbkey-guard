@@ -19,6 +19,8 @@ def fake_install(tmp_path, monkeypatch):
     monkeypatch.setattr(sa.config, "PACKAGE_ROOT", pkg)
     monkeypatch.setattr(sa, "is_admin", lambda: True)
     monkeypatch.setattr(sa, "start_menu_dir", lambda: tmp_path / "menu" / "usbkey")
+    monkeypatch.setattr(sa.paths, "ensure_state_tree", lambda: None)
+    monkeypatch.setattr(sa.acl, "allow_state_writes", lambda root: True)
 
     calls = []
 
@@ -98,3 +100,17 @@ def test_start_menu_gets_a_shortcut_not_only_a_bat(fake_install):
     if not lnk.is_file():
         pytest.skip("COM shortcut creation unavailable in this environment")
     assert lnk.stat().st_size > 0
+
+
+def test_install_grants_local_users_write_access_to_state(fake_install, monkeypatch):
+    install, _ = fake_install
+    seen = []
+    monkeypatch.setattr(sa.acl, "allow_state_writes",
+                        lambda root: seen.append(root) or True)
+    sa.install()
+    assert seen == [str(sa.config.STATE_ROOT)]
+
+
+def test_repair_permissions_is_admin_only(monkeypatch):
+    monkeypatch.setattr(sa, "is_admin", lambda: False)
+    assert sa.repair_permissions() == 1

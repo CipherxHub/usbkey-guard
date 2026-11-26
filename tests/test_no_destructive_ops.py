@@ -27,6 +27,8 @@ ALLOWED_EXCEPTIONS = {
     "tui.py": {"unlink"},
     # setup_app.py removes only its own Program Files copy and Start menu entry.
     "setup_app.py": {"rmtree", "unlink"},
+    # statewrite.py removes only the temp file it just wrote.
+    "statewrite.py": {"unlink"},
 }
 
 

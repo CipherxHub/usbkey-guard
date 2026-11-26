@@ -30,7 +30,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from . import keystore, paths
+from . import keystore, paths, statewrite
 from .errors import ConfigCorrupt
 from .log import get_log
 
@@ -102,9 +102,7 @@ def _read_config() -> dict[str, Any]:
 
 
 def _write_config(cfg: dict[str, Any]) -> None:
-    tmp = CONFIG.with_name(CONFIG.name + ".tmp")
-    _write_json_durable(tmp, cfg)
-    os.replace(tmp, CONFIG)
+    statewrite.save(CONFIG, cfg, _write_json_durable)
 
 
 def _sha(data: bytes) -> str:

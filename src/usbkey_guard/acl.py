@@ -9,6 +9,10 @@ Never deny Everyone or Authenticated Users: SYSTEM belongs to both and would
 lose its own recovery path.
 """
 from typing import Any
+import os
+import stat
+import subprocess
+from pathlib import Path
 
 import win32con
 import win32security
@@ -158,6 +162,76 @@ ADMINS_SID = "S-1-5-32-544"
 FILE_ALL = 0x001F01FF
 FILE_READ_EXEC = 0x001200A9
 _PROTECTED_DACL = getattr(win32security, "PROTECTED_DACL_SECURITY_INFORMATION", 0x80000000)
+_SE_DACL_PROTECTED = 0x1000
+
+
+def state_is_hardened(path: str) -> bool:
+    """True when `usbkey-setup harden` marked this state folder admin-only.
+
+    A marker file, not the DACL: some folders (pytest temp dirs, for one) are
+    created with a protected DACL and would otherwise look hardened.
+    """
+    return (Path(path) / ".hardened").is_file()
+
+
+def _is_reparse(path: str) -> bool:
+    try:
+        attrs = os.stat(path, follow_symlinks=False).st_file_attributes
+        return bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    except (OSError, AttributeError):
+        # Unreadable or unknown: never traverse into it.
+        return True
+
+
+def _state_objects(root: Path):
+    """Yield (path, is_dir) for the state tree, skipping junctions."""
+    yield root, True
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in dirnames:
+            p = Path(dirpath) / name
+            if not _is_reparse(str(p)):
+                yield p, True
+        for name in filenames:
+            p = Path(dirpath) / name
+            if not _is_reparse(str(p)):
+                yield p, False
+
+
+def allow_state_writes(root: str) -> bool:
+    """Let local users update the state files, which hold no key material.
+
+    ProgramData lets Users create new files but grants only read on files that
+    SYSTEM or an elevated session wrote, so a normal desktop session could not
+    replace vaults.json and every vault action failed with WinError 5.
+
+    A hardened state folder is left alone. Best effort: never raises.
+    """
+    root_path = Path(root)
+    if state_is_hardened(str(root_path)):
+        _log.info("state root is hardened, leaving it admin-only: %s", root_path)
+        return False
+    failed = 0
+    for path, is_dir in _state_objects(root_path):
+        # /grant:r replaces our previous ACE, so this is idempotent.
+        grant = "*" + USERS_SID + (":(OI)(CI)M" if is_dir else ":M")
+        try:
+            result = subprocess.run(
+                ["icacls", str(path), "/grant:r", grant, "/C", "/Q"],
+                capture_output=True, text=True,
+            )
+        except OSError as exc:
+            _log.warning("could not grant state writes on %s: %s", path, exc)
+            failed += 1
+            continue
+        if result.returncode != 0:
+            _log.warning("icacls failed on %s: %s", path,
+                         (result.stdout or result.stderr).strip())
+            failed += 1
+    if failed:
+        _log.warning("state write grant incomplete: %s object(s) failed", failed)
+        return False
+    _log.info("state folder writable by local users: %s", root_path)
+    return True
 
 
 def harden_state_root(path: str) -> bool:
@@ -195,6 +269,11 @@ def harden_state_root(path: str) -> bool:
             None, None, dacl, None,
         )
         _dacl(path)  # verify we can still read it back
+        try:
+            (Path(path) / ".hardened").write_text(
+                "usbkey-setup harden: state folder is admin-only\n", encoding="utf-8")
+        except OSError:
+            _log.warning("could not write the hardened marker in %s", path)
         _log.info("hardened state root: %s", path)
         return True
     except Exception as exc:

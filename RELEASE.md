@@ -1,6 +1,6 @@
 # Release build notes
 
-Package: `usbkey-guard` 1.0.5 (pip-installable, Windows only)
+Package: `usbkey-guard` 1.0.6 (pip-installable, Windows only)
 
 ## What is included
 
@@ -13,15 +13,16 @@ Package: `usbkey-guard` 1.0.5 (pip-installable, Windows only)
   Start menu shortcut, SYSTEM scheduled task
 - `config.py` - all paths overridable by `USBKEY_STATE` / `USBKEY_INSTALL`
 - `README.md`, `INSTALL.md`, `QUICKSTART.md`, `LIMITATIONS.md`, `LICENSE`
-- 68 automated tests including source-level no-destructive guard, crash replay,
+- 77 automated tests including source-level no-destructive guard, crash replay,
   unique vault IDs, path/manifest traversal, all-or-nothing unlock, verified
-  unprotect, second-PC key adopt, corrupt-state handling, the installed-copy
-  import layout and the Start menu launcher encoding
+  unprotect, second-PC key adopt, state-permission repair, corrupt-state
+  handling, the installed-copy import layout and the Start menu launcher
+  encoding
 
 ## Verified
 
 - `pip install -e .` succeeds
-- `python -m pytest tests -q` -> 68 passed
+- `python -m pytest tests -q` -> 77 passed
 - `python -m usbkey_guard --help` works
 - convert -> verify -> unlock -> lock round trip, including empty folders, a
   modified file that must survive locking, and a vault released back to
@@ -30,6 +31,19 @@ Package: `usbkey-guard` 1.0.5 (pip-installable, Windows only)
 - attach --work-dir restores a vault made on another machine into a new folder
 - manifests written by 1.0.1 (no `kdf` key) still unlock
 - TUI first-run correctly detects a removable drive and offers it for enrollment
+
+## Fixed in 1.0.6
+
+- Vault actions from a normal (non-elevated) session failed with
+  `[WinError 5] Access is denied: '...\\vaults.json.tmp' -> '...\\vaults.json'`.
+  Windows grants `BUILTIN\Users` create-file on `%PROGRAMDATA%` but only read on
+  files written by SYSTEM or an elevated session. `usbkey-setup install` now
+  grants local users modify on the state tree (metadata only, never key
+  material), and `usbkey-setup repair-permissions` fixes an existing install.
+- A permission failure now reports the remedy and removes its temp file instead
+  of leaving a stale `vaults.json.tmp` behind.
+- `usbkey-setup harden` records a marker, so a later install or repair does not
+  silently undo the admin-only setting.
 
 ## Fixed in 1.0.5
 

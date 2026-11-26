@@ -51,9 +51,18 @@ to a different stick never works, because the key is bound to the original volum
 ## State folder
 
 `%PROGRAMDATA%\usbkey` holds only metadata: volume identity, vault paths, salts, hashes and
-ACL snapshots. It never holds a key or a passphrase. It is writable by users by default so
-that unprivileged users can create their own vaults; run `usbkey-setup harden` if you would
-rather trade that for admin-only vault management.
+ACL snapshots. It never holds a key or a passphrase. It is writable by local users so that a
+normal, non-elevated TUI session can register, unlock and release vaults; run
+`usbkey-setup harden` if you would rather trade that for admin-only vault management.
+
+What a local user could do with that write access: change vault registrations, delete the
+journal or logs, or add an ACL root that the SYSTEM enforcer would then apply. None of that
+reveals plaintext, because the vault key is derived from the passphrase plus the stick and is
+never stored. It is an availability and audit-trail concern, not a confidentiality one.
+
+If an older install reports `Access is denied ... vaults.json`, its files were written by
+SYSTEM or an elevated session and only administrators can modify them. Fix it once with
+`usbkey-setup repair-permissions` from an Administrator prompt (1.0.6 and later).
 
 ## Vault folders you did not create
 

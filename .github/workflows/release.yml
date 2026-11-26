@@ -75,6 +75,12 @@ jobs:
             (a .bat fallback is kept). The launcher is written with correct CRLF
             line endings and reports a missing Python instead of closing silently.
 
+            Permissions: a normal (non-elevated) session could not update
+            `vaults.json` because Windows grants Users only read on state files
+            written by SYSTEM. `usbkey-setup install` now grants local users
+            modify on the state tree (metadata only, never key material) and
+            `usbkey-setup repair-permissions` fixes an existing install.
+
   publish-pypi:
     needs: build
     if: vars.PYPI_PUBLISHED != github.ref_name

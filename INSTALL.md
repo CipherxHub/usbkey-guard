@@ -99,6 +99,24 @@ python "C:\Program Files\usbkey\run_tui.py"
 If a window flashes and closes, run that command in an open PowerShell to see the
 error; the usual cause is Python not being on `PATH`.
 
+## If a vault action says "Access is denied"
+
+```
+NOT CHANGED: cannot update C:\ProgramData\usbkey\vaults.json: access denied
+```
+
+The state files were written by SYSTEM or by an elevated session, so Windows gave
+`BUILTIN\Users` read-only on them. This affects installs made before 1.0.6 and is
+fixed by one elevated command:
+
+```powershell
+usbkey-setup repair-permissions
+```
+
+After that the TUI works from a normal desktop session. `usbkey-setup install`
+runs the same repair, and `usbkey-setup harden` deliberately reverses it
+(admin-only vault management).
+
 ## Uninstall
 
 ```powershell

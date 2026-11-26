@@ -9,7 +9,7 @@ import win32event
 import win32api
 import winerror
 
-from . import acl, journal, paths, snapshot
+from . import acl, journal, paths, snapshot, statewrite
 from .errors import ConfigCorrupt, JournalUnreconciled, MutexHeld, VerifyDrift
 from .log import get_log
 
@@ -64,9 +64,7 @@ def _write_json_durable(path, payload: dict[str, Any]) -> None:
 
 
 def save_config(cfg: dict[str, Any]) -> None:
-    tmp = CONFIG.with_name(CONFIG.name + ".tmp")
-    _write_json_durable(tmp, cfg)
-    os.replace(tmp, CONFIG)
+    statewrite.save(CONFIG, cfg, _write_json_durable)
 
 
 @contextlib.contextmanager
