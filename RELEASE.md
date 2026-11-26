@@ -1,6 +1,6 @@
 # Release build notes
 
-Package: `usbkey-guard` 1.0.12 (pip-installable, Windows only)
+Package: `usbkey-guard` 1.0.13 (pip-installable, Windows only)
 
 ## What is included
 
@@ -16,7 +16,7 @@ Package: `usbkey-guard` 1.0.12 (pip-installable, Windows only)
   started), state-folder permissions, `uninstall --purge` for a full removal
 - `config.py` - all paths overridable by `USBKEY_STATE` / `USBKEY_INSTALL`
 - `README.md`, `INSTALL.md`, `QUICKSTART.md`, `LIMITATIONS.md`, `LICENSE`
-- 149 automated tests including source-level no-destructive guard, crash replay,
+- 151 automated tests including source-level no-destructive guard, crash replay,
   unique vault IDs, path/manifest traversal, all-or-nothing unlock, verified
   unprotect, second-PC key adopt (including a different volume GUID and a legacy
   key file), cross-machine vault keys, state-permission repair, service start and
@@ -30,7 +30,7 @@ Package: `usbkey-guard` 1.0.12 (pip-installable, Windows only)
 ## Verified
 
 - `pip install -e .` succeeds
-- `python -m pytest tests -q` -> 148 passed, 1 skipped (the mutual-exclusion
+- `python -m pytest tests -q` -> 151 passed here (the mutual-exclusion
   test skips itself on a PC where the real enforcer is already running)
 - `python -m usbkey_guard --help` works
 - convert -> verify -> unlock -> lock round trip, including empty folders, a
@@ -40,6 +40,19 @@ Package: `usbkey-guard` 1.0.12 (pip-installable, Windows only)
 - attach --work-dir restores a vault made on another machine into a new folder
 - manifests written by 1.0.1 (no `kdf` key) still unlock
 - TUI first-run correctly detects a removable drive and offers it for enrollment
+
+## Fixed in 1.0.13
+
+The 1.0.12 diagnosis treated every "not running" as "never started", which is
+the wrong advice for the most common case: the task ran, then the process was
+ended (Task Manager, `schtasks /end`, antivirus). Windows reports
+`0x41306 (terminated)` for that, and `RestartOnFailure` does not fire.
+
+- `status` now reads the last result: a terminated process is reported as
+  terminated, with the note that the five-minute watchdog restarts it and the
+  one-line command to start it immediately.
+- A clean exit (result 0) points at `logs\usbkey.log` instead of guessing.
+- Two new tests cover the terminated and boot-log paths.
 
 ## Fixed in 1.0.12
 

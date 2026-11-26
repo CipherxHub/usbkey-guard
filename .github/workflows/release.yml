@@ -96,7 +96,10 @@ jobs:
             `C:\ProgramData\usbkey\logs\enforcer-boot.log`, which holds the
             enforcer's own startup traceback because pythonw has no console. The
             TUI refresh reports the same after the elevated window instead of
-            saying "Installed" and stopping. The task also gained a five-minute
+            saying "Installed" and stopping. A terminated process (last result
+            0x41306, which is what `schtasks /end` and Task Manager leave) is
+            reported as terminated with the command to start it again, instead of
+            being described as "never started". The task also gained a five-minute
             repetition trigger: RestartOnFailure only covers a process that exits
             with an error, so a service ended from Task Manager, killed by
             antivirus or by an update used to stay down until the next boot. With

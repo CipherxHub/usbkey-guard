@@ -100,6 +100,36 @@ def test_status_explains_a_stopped_service(tmp_path, monkeypatch, capsys):
     assert "run install again" in out
 
 
+def test_diagnosis_names_a_terminated_process(tmp_path, monkeypatch, capsys):
+    """`schtasks /end` leaves 0x41306; the watchdog is the way back."""
+    monkeypatch.setattr(sa.config, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(sa, "interpreter_is_shared", lambda: True)
+    sa.print_service_diagnosis({
+        "exists": True, "state": 3, "last_result": 0x41306,
+        "last_run": None, "xml": _task_xml(),
+    })
+    out = capsys.readouterr().out
+    assert "terminated" in out
+    assert "watchdog" in out
+    assert "never started" not in out
+
+
+def test_diagnosis_shows_the_boot_log(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sa.config, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(sa, "interpreter_is_shared", lambda: True)
+    log = tmp_path / "logs" / "enforcer-boot.log"
+    log.parent.mkdir(parents=True)
+    log.write_text("ModuleNotFoundError: No module named 'win32event'",
+                   encoding="utf-8")
+    sa.print_service_diagnosis({
+        "exists": True, "state": 3, "last_result": 1,
+        "last_run": None, "xml": _task_xml(),
+    })
+    out = capsys.readouterr().out
+    assert "win32event" in out
+    assert "enforcer-boot.log" in out
+
+
 def test_status_is_quiet_when_the_service_runs(monkeypatch, capsys):
     monkeypatch.setattr(sa, "task_info", lambda: {
         "exists": True, "state": sa.TASK_STATE_RUNNING, "last_result": 0x41301,

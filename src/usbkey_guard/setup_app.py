@@ -377,11 +377,22 @@ def print_service_diagnosis(info: dict | None = None) -> None:
     problems = _action_problems(command, arguments)
     for problem in problems:
         print("  PROBLEM:", problem)
+    code = int(info.get("last_result") or 0) & 0xFFFFFFFF
     tail = _boot_log_tail()
     if tail:
         print("Last startup failure (" + str(boot_log_path()) + "):")
         for line in tail.splitlines():
             print("  " + line)
+    elif code == 0x41306:
+        print("The service process was terminated (Task Manager, 'End task', or "
+              "antivirus). The five-minute watchdog starts it again by itself; "
+              "to do it now: schtasks /run /tn usbkey-enforcer")
+    elif code in (0x41303, 0x41300):
+        print("The task has not started yet. Run install again as "
+              "Administrator, or start it with: schtasks /run /tn usbkey-enforcer")
+    elif code == 0:
+        print("The service exited cleanly instead of running. See "
+              + str(Path(config.STATE_ROOT) / "logs" / "usbkey.log"))
     elif not problems:
         print("No startup failure was logged, so the task probably never "
               "started (a disabled task, or a policy that blocks it).")
