@@ -27,6 +27,11 @@ python -m usbkey_guard export-recovery D:\Recovery          # bundle to keep off
 
 If `usbkey` itself is on `PATH`, the short forms are identical.
 
+To stop protecting something you no longer need, use **8) Stop protecting a vault**
+(or `vault remove`). It decrypts the files, deletes the encrypted copy, and
+leaves ordinary files you can delete normally. ACL-protected folders come out with
+`protect remove <path>` after unlocking them.
+
 ## Upgrading
 
 ```powershell
@@ -38,11 +43,6 @@ The installed copy records its version. If it is older than the package you just
 installed, the menu says so and offers to refresh the system copy and service
 (one UAC prompt). Answer Enter, and it continues into the menu when the install
 finishes.
-
-To stop protecting something you no longer need, use **8) Stop protecting a vault**
-(or `vault remove`). It decrypts the files, deletes the encrypted copy, and
-leaves ordinary files you can delete normally. ACL-protected folders come out with
-`protect remove <path>` after unlocking them.
 
 ## Moving to a laptop
 
