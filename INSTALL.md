@@ -22,6 +22,27 @@ usbkey-setup install
 ```
 
 Either form registers `usbkey`, `usbkey-tui` and `usbkey-setup`.
+
+If PowerShell says `The term 'usbkey' is not recognized`, the package is
+installed but pip's `Scripts` folder is not on `PATH`. This is normal with the
+new Python install manager (`%LOCALAPPDATA%\Python\pythoncore-*`), which only
+puts `python` itself on `PATH`. Use the module forms, which are equivalent:
+
+```powershell
+python -m usbkey_guard --help
+python -m usbkey_guard.tui
+python -m usbkey_guard.setup_app install
+```
+
+To get the short commands instead, add pip's script folder to your user `PATH`
+once, then open a new terminal:
+
+```powershell
+$scripts = python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+[Environment]::SetEnvironmentVariable(
+    'Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + $scripts, 'User')
+```
+
 `usbkey-setup install`:
 - copies the package to `C:\Program Files\usbkey\usbkey_guard`
 - adds an all-users Start menu entry named `usbkey TUI`
