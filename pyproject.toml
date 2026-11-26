@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "usbkey-guard"
+version = "1.0.1"
+description = "USB-key-gated AES-GCM vault for Windows (headless, TUI, no GUI)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "pywin32>=306; sys_platform == 'win32'",
+    "psutil>=5.9",
+    "cryptography>=42",
+]
+classifiers = [
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+
+[project.scripts]
+usbkey = "usbkey_guard.cli:main"
+usbkey-tui = "usbkey_guard.tui:main"
+usbkey-setup = "usbkey_guard.setup_app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

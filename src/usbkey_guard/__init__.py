@@ -1,0 +1,1 @@
+r"""usbkey core package."""
