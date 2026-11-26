@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from . import acl, config, paths
@@ -55,6 +56,49 @@ def python_console() -> Path:
 def task_command() -> str:
     script = Path(config.INSTALL_ROOT) / ENFORCER_BOOTSTRAP
     return f'"{pythonw()}" "{script}"'
+
+
+def interpreter_is_shared() -> bool:
+    """True when the running Python is usable by every account on this PC.
+
+    The Start menu launcher embeds this path, so a Python under
+    `C:\\Users\\<name>` works for that one account (and for SYSTEM) but gives
+    other users "Access is denied".
+    """
+    try:
+        exe = Path(sys.executable).resolve()
+        profiles = Path.home().parent
+        return not exe.is_relative_to(profiles)
+    except (OSError, ValueError):
+        return True
+
+
+def _task_running() -> bool:
+    query = subprocess.run(["schtasks", "/query", "/tn", config.TASK_NAME, "/fo", "LIST"],
+                           capture_output=True, text=True)
+    return query.returncode == 0 and "Running" in query.stdout
+
+
+def _start_service() -> int:
+    """Start the task now: an onstart task otherwise does nothing until reboot."""
+    if _task_running():
+        print("Background service already running:", config.TASK_NAME)
+        return 0
+    started = subprocess.run(["schtasks", "/run", "/tn", config.TASK_NAME],
+                             capture_output=True, text=True)
+    if started.returncode != 0:
+        print("WARNING: could not start the service:",
+              (started.stdout or started.stderr).strip())
+        print("It will start at the next boot.")
+        return 0
+    time.sleep(2)
+    if _task_running():
+        print("Background service running:", config.TASK_NAME)
+        return 0
+    print("WARNING: the service task was started but is not running.")
+    print("Plaintext will NOT be locked when the stick is removed until it runs.")
+    print("Run `usbkey-setup status`, or reboot, then try again.")
+    return 1
 
 
 def _assert_own_install_root(path: Path) -> None:
@@ -174,6 +218,14 @@ def install() -> int:
     )
     shortcut = _write_shortcut(menu / "usbkey TUI.lnk", launcher)
     print("Start menu entry (all users):", shortcut or launcher)
+    if not interpreter_is_shared():
+        print()
+        print("NOTE: this Python lives in a user profile:")
+        print("   ", sys.executable)
+        print("The all-users Start menu entry points at it, so it works for this")
+        print("account (and for the SYSTEM service) but other users get 'Access is")
+        print("denied'. For a machine-wide install, use a Python installed for all")
+        print("users, e.g. python.org with 'Install for all users'.")
     print("Optional: `usbkey-setup harden` restricts the state folder to admins")
     print("(non-admin users then cannot create new vaults).")
 
@@ -183,7 +235,9 @@ def install() -> int:
         capture_output=True, text=True,
     )
     print(result.stdout.strip() or result.stderr.strip())
-    return result.returncode
+    if result.returncode != 0:
+        return result.returncode
+    return _start_service()
 
 
 def uninstall() -> int:
@@ -229,7 +283,11 @@ def repair_permissions() -> int:
 
 
 def status() -> int:
-    result = subprocess.run(["schtasks", "/query", "/tn", config.TASK_NAME],
+    print("Python:", sys.executable)
+    print("Usable by other users:",
+          "yes" if interpreter_is_shared() else "no (it is inside a user profile)")
+    print("Service:", "running" if _task_running() else "NOT running")
+    result = subprocess.run(["schtasks", "/query", "/tn", config.TASK_NAME, "/fo", "LIST"],
                             capture_output=True, text=True)
     print(result.stdout.strip() or result.stderr.strip())
     return result.returncode

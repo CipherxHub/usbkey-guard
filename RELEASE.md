@@ -1,6 +1,6 @@
 # Release build notes
 
-Package: `usbkey-guard` 1.0.6 (pip-installable, Windows only)
+Package: `usbkey-guard` 1.0.7 (pip-installable, Windows only)
 
 ## What is included
 
@@ -9,20 +9,21 @@ Package: `usbkey-guard` 1.0.6 (pip-installable, Windows only)
   attach-existing-vault (with a restore-folder override), second-PC key adopt,
   stop-protecting, service control and recovery export
 - CLI for scripting/recovery
-- `usbkey-setup install|uninstall|status|harden` - Program Files copy, all-users
-  Start menu shortcut, SYSTEM scheduled task
+- `usbkey-setup install|uninstall|status|harden|repair-permissions` - Program
+  Files copy, all-users Start menu shortcut, SYSTEM scheduled task (created and
+  started), state-folder permissions
 - `config.py` - all paths overridable by `USBKEY_STATE` / `USBKEY_INSTALL`
 - `README.md`, `INSTALL.md`, `QUICKSTART.md`, `LIMITATIONS.md`, `LICENSE`
-- 77 automated tests including source-level no-destructive guard, crash replay,
+- 81 automated tests including source-level no-destructive guard, crash replay,
   unique vault IDs, path/manifest traversal, all-or-nothing unlock, verified
-  unprotect, second-PC key adopt, state-permission repair, corrupt-state
-  handling, the installed-copy import layout and the Start menu launcher
-  encoding
+  unprotect, second-PC key adopt, state-permission repair, service start and
+  interpreter checks, corrupt-state handling, the installed-copy import layout
+  and the Start menu launcher encoding
 
 ## Verified
 
 - `pip install -e .` succeeds
-- `python -m pytest tests -q` -> 77 passed
+- `python -m pytest tests -q` -> 81 passed
 - `python -m usbkey_guard --help` works
 - convert -> verify -> unlock -> lock round trip, including empty folders, a
   modified file that must survive locking, and a vault released back to
@@ -31,6 +32,19 @@ Package: `usbkey-guard` 1.0.6 (pip-installable, Windows only)
 - attach --work-dir restores a vault made on another machine into a new folder
 - manifests written by 1.0.1 (no `kdf` key) still unlock
 - TUI first-run correctly detects a removable drive and offers it for enrollment
+
+## Fixed in 1.0.7
+
+- `usbkey-setup install` created the `usbkey-enforcer` task but never started it,
+  so after a fresh install nothing locked the plaintext until the next reboot.
+  It now starts the task and reports whether it is actually running; a service
+  that will not start is a hard warning, because the data would stay readable.
+- The install and the Start menu entry embed the path of the Python that ran
+  them. A Python inside a user profile (`C:\Users\<name>\...`, the default for
+  the new Python install manager) works for that account and for SYSTEM but not
+  for other users. Install now says so, and `usbkey-setup status` shows the
+  interpreter, whether it is usable by other users, and whether the service is
+  running.
 
 ## Fixed in 1.0.6
 

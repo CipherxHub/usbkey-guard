@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "usbkey-guard"
-version = "1.0.6"
+version = "1.0.7"
 description = "USB-key-gated AES-GCM vault for Windows (headless, TUI, no GUI)"
 readme = "README.md"
 requires-python = ">=3.11"

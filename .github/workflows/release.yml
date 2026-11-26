@@ -81,6 +81,12 @@ jobs:
             modify on the state tree (metadata only, never key material) and
             `usbkey-setup repair-permissions` fixes an existing install.
 
+            Service: `usbkey-setup install` used to create the enforcer task
+            without starting it, so a fresh install locked nothing until the
+            next reboot. It now starts the task and reports whether it is
+            running. `usbkey-setup status` also shows the interpreter, whether
+            other users can use it, and the service state.
+
   publish-pypi:
     needs: build
     if: vars.PYPI_PUBLISHED != github.ref_name

@@ -16,6 +16,17 @@
 - Deleting or formatting the encrypted vault (that destroys data, but reveals nothing)
 - Hardware-level attacks, cold-boot attacks, or a compromised operating system
 
+## Locking depends on the background service
+
+Encrypting on demand works from the TUI alone, but re-locking after the stick is
+pulled is done by `usbkey-enforcer`, a SYSTEM scheduled task created by
+`usbkey-setup install`. Without it, an unlocked folder stays readable. Check with
+`usbkey-setup status` (`Service: running`) and `usbkey status`.
+
+The task runs the Python that performed the install. If that Python is inside a
+user profile, only that account can start the TUI from the Start menu; the
+service itself still runs as SYSTEM. Use a machine-wide Python on a shared PC.
+
 ## Removing protection
 
 `usbkey vault remove --vault-id <id> --yes` (TUI: *Stop protecting a vault*) decrypts

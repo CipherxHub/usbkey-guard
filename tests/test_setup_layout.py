@@ -26,9 +26,13 @@ def fake_install(tmp_path, monkeypatch):
 
     def fake_run(argv, **kwargs):
         calls.append(argv)
+        if "/query" in argv:
+            return types.SimpleNamespace(returncode=0, stdout="Status:        Running",
+                                         stderr="")
         return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr(sa.subprocess, "run", fake_run)
+    monkeypatch.setattr(sa.time, "sleep", lambda seconds: None)
     return install, calls
 
 
@@ -114,3 +118,45 @@ def test_install_grants_local_users_write_access_to_state(fake_install, monkeypa
 def test_repair_permissions_is_admin_only(monkeypatch):
     monkeypatch.setattr(sa, "is_admin", lambda: False)
     assert sa.repair_permissions() == 1
+
+
+def test_install_starts_the_service_when_it_is_not_running(fake_install, monkeypatch):
+    install, calls = fake_install
+    states = iter(["Status: Ready", "Status: Running"])
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if "/query" in argv:
+            return types.SimpleNamespace(returncode=0, stdout=next(states), stderr="")
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sa.subprocess, "run", fake_run)
+    assert sa.install() == 0
+    assert any("/run" in call for call in calls), \
+        "an onstart task does nothing until it is run once"
+
+
+def test_install_warns_when_the_service_will_not_start(fake_install, monkeypatch, capsys):
+    install, calls = fake_install
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if "/query" in argv:
+            return types.SimpleNamespace(returncode=0, stdout="Status: Ready", stderr="")
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sa.subprocess, "run", fake_run)
+    assert sa.install() == 1
+    out = capsys.readouterr().out
+    assert "will NOT be locked" in out
+
+
+def test_interpreter_inside_a_user_profile_is_not_shared(monkeypatch):
+    fake = Path.home() / "AppData" / "Local" / "Programs" / "Python312" / "python.exe"
+    monkeypatch.setattr(sa.sys, "executable", str(fake))
+    assert sa.interpreter_is_shared() is False
+
+
+def test_machine_wide_interpreter_is_shared(monkeypatch):
+    monkeypatch.setattr(sa.sys, "executable", r"C:\Program Files\Python312\python.exe")
+    assert sa.interpreter_is_shared() is True

@@ -43,15 +43,31 @@ $scripts = python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
     'Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + $scripts, 'User')
 ```
 
-`usbkey-setup install`:
+`usbkey-setup install` must run **as Administrator**. It:
 - copies the package to `C:\Program Files\usbkey\usbkey_guard`
 - adds an all-users Start menu entry named `usbkey TUI`
-- creates the SYSTEM scheduled task `usbkey-enforcer` (starts at boot, watches the USB stick)
+- creates the SYSTEM scheduled task `usbkey-enforcer` and starts it immediately
+- grants local users write access to the metadata in `C:\ProgramData\usbkey`
+
+Everything is machine-wide: install once, then every account on that PC opens
+**usbkey TUI** from the Start menu. Each user still needs the stick and the
+passphrase; they share the service, not the keys.
 
 The task and the Start menu entry run bootstrap scripts from
 `C:\Program Files\usbkey`, so the installed copy is what executes even when pip
-installed into one user's profile. The launcher falls back to `py`/`python` if the
-installing interpreter is not readable by another user.
+installed into one user's profile.
+
+One caveat: both point at the Python that ran the install. If that Python is in a
+user profile (`C:\Users\<name>\...`, which is where the new Python install manager
+puts it), the Start menu entry works only for that account. Install Python from
+python.org with **Install for all users** (`C:\Program Files\Python312`) when the
+PC is shared. `usbkey-setup install` prints a note when it detects this, and
+`usbkey-setup status` shows the interpreter, whether other users can use it, and
+whether the service is running.
+
+```powershell
+usbkey-setup status
+```
 
 State (identity, vault manifests, journal, logs) lives in `C:\ProgramData\usbkey`.
 Override it with `USBKEY_STATE` before importing if you need a different location.
@@ -105,6 +121,23 @@ Install the same way on the laptop (`pip install usbkey-guard`, then
 Nothing secret is copied between machines: the vault key is derived from the
 passphrase, the stick's secret and that stick's volume identity. Copying
 `key.dat` to a different stick does not work.
+
+## If the plaintext is still there after you pull the stick
+
+Locking is done by the background service, not by the TUI. Two checks:
+
+```powershell
+usbkey-setup status
+usbkey status
+```
+
+`usbkey-setup status` must print `Service: running`. If it says `NOT running`,
+the service is not watching the stick, so nothing will be re-encrypted: run
+`usbkey-setup install` again as Administrator (it starts the task) or reboot.
+`usbkey status` must list the vault you expect.
+
+The service also waits `grace_seconds` after the stick disappears (3 by default)
+before locking, and it skips a vault whose plaintext folder is missing.
 
 ## If the Start menu entry does nothing
 
