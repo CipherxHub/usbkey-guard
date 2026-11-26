@@ -85,6 +85,20 @@ Nothing secret is copied between machines: the vault key is derived from the
 passphrase, the stick's secret and that stick's volume identity. Copying
 `key.dat` to a different stick does not work.
 
+## If the Start menu entry does nothing
+
+`usbkey-setup install` writes both a shortcut (`usbkey TUI.lnk`) and a fallback
+script (`usbkey TUI.bat`) to the all-users Start menu folder. If the entry is
+missing right after installing, sign out and back in (or restart Explorer) so the
+Start menu rebuilds its list. The TUI can always be started directly:
+
+```powershell
+python "C:\Program Files\usbkey\run_tui.py"
+```
+
+If a window flashes and closes, run that command in an open PowerShell to see the
+error; the usual cause is Python not being on `PATH`.
+
 ## Uninstall
 
 ```powershell

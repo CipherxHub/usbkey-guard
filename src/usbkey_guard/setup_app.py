@@ -69,6 +69,32 @@ def _write_bootstrap(name: str, source: str) -> None:
     (Path(config.INSTALL_ROOT) / name).write_text(source, encoding="utf-8")
 
 
+def _write_shortcut(path: Path, launcher: Path) -> Path | None:
+    """Create a real .lnk next to the .bat.
+
+    Windows 11 Start search does not reliably surface .bat files, and a shortcut
+    is what users actually click. Failures are non-fatal: the .bat still works.
+    """
+    try:
+        import win32com.client
+
+        shell = win32com.client.Dispatch("WScript.Shell")
+        link = shell.CreateShortcut(str(path))
+        link.TargetPath = str(Path(os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe")))
+        link.Arguments = f'/c ""{launcher}""'
+        link.WorkingDirectory = str(launcher.parent)
+        link.Description = "usbkey - USB-key-gated encrypted vault"
+        try:
+            link.IconLocation = f"{python_console()},0"
+        except OSError:
+            pass
+        link.Save()
+        return path
+    except Exception as exc:  # COM missing, policy blocked, ...
+        print("WARNING: could not create Start menu shortcut:", exc)
+        return None
+
+
 def harden_state() -> bool:
     """Create the state tree as this admin and restrict it to admins + owner."""
     if os.environ.get("USBKEY_SKIP_HARDEN") == "1":
@@ -107,24 +133,38 @@ def install() -> int:
     menu.mkdir(parents=True, exist_ok=True)
     launcher = menu / "usbkey TUI.bat"
     script = dest / TUI_BOOTSTRAP
-    launcher.write_text(
-        "@echo off\r\n"
-        "title usbkey\r\n"
-        f'if exist "{python_console()}" (\r\n'
-        f'  "{python_console()}" "{script}"\r\n'
-        "  goto end\r\n"
-        ")\r\n"
-        "where py >nul 2>nul\r\n"
-        "if %errorlevel%==0 (\r\n"
-        f'  py "{script}"\r\n'
-        "  goto end\r\n"
-        ")\r\n"
-        f'python "{script}"\r\n'
-        ":end\r\n"
-        "pause\r\n",
-        encoding="utf-8",
+    # Bytes, not text: text mode turns the explicit CRLF into CR CR LF, which
+    # cmd.exe mis-parses inside the parenthesised block (the launcher then just
+    # flashes and closes).
+    launcher.write_bytes(
+        (
+            "@echo off\r\n"
+            "title usbkey\r\n"
+            f'if exist "{python_console()}" (\r\n'
+            f'  "{python_console()}" "{script}"\r\n'
+            "  goto end\r\n"
+            ")\r\n"
+            "where py >nul 2>nul\r\n"
+            "if %errorlevel%==0 (\r\n"
+            f'  py "{script}"\r\n'
+            "  goto end\r\n"
+            ")\r\n"
+            "where python >nul 2>nul\r\n"
+            "if %errorlevel%==0 (\r\n"
+            f'  python "{script}"\r\n'
+            "  goto end\r\n"
+            ")\r\n"
+            "echo.\r\n"
+            "echo Python was not found. Install Python 3.11/3.12, then run:\r\n"
+            "echo   pip install usbkey-guard\r\n"
+            "echo   usbkey-setup install\r\n"
+            ":end\r\n"
+            "echo.\r\n"
+            "pause\r\n"
+        ).encode("utf-8")
     )
-    print("Start menu entry (all users):", launcher)
+    shortcut = _write_shortcut(menu / "usbkey TUI.lnk", launcher)
+    print("Start menu entry (all users):", shortcut or launcher)
     print("Optional: `usbkey-setup harden` restricts the state folder to admins")
     print("(non-admin users then cannot create new vaults).")
 

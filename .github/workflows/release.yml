@@ -71,6 +71,10 @@ jobs:
             the existing key.dat is kept, then attach the vault with
             `--work-dir` to pick the restore folder on that machine.
 
+            Start menu: the all-users entry is now a real `usbkey TUI` shortcut
+            (a .bat fallback is kept). The launcher is written with correct CRLF
+            line endings and reports a missing Python instead of closing silently.
+
   publish-pypi:
     needs: build
     if: vars.PYPI_PUBLISHED != github.ref_name

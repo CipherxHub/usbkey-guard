@@ -80,3 +80,21 @@ def test_uninstall_removes_only_its_own_tree(fake_install):
     sa.install()
     assert sa.uninstall() == 0
     assert not install.exists()
+
+
+def test_launcher_is_not_written_with_cr_cr_lf(fake_install):
+    install, _ = fake_install
+    sa.install()
+    raw = (install.parents[1] / "menu" / "usbkey" / "usbkey TUI.bat").read_bytes()
+    assert b"\r\r\n" not in raw, "cmd.exe mis-parses CR CR LF line endings"
+    assert b"\r\n" in raw
+
+
+def test_start_menu_gets_a_shortcut_not_only_a_bat(fake_install):
+    install, _ = fake_install
+    sa.install()
+    menu = install.parents[1] / "menu" / "usbkey"
+    lnk = menu / "usbkey TUI.lnk"
+    if not lnk.is_file():
+        pytest.skip("COM shortcut creation unavailable in this environment")
+    assert lnk.stat().st_size > 0
