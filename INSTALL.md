@@ -240,17 +240,28 @@ The three causes it names, in order of how often they happen:
    A SYSTEM task cannot execute Store aliases. Install Python from python.org
    and run install again.
 3. **Python cannot import a dependency.** `status` prints
-   `WARNING: ... is missing modules: cryptography (ModuleNotFoundError: ...)`,
-   or the boot log shows it. That happens when the package or its dependencies
-   were installed for a different interpreter (a user-only Python, or a
-   virtualenv). From 1.0.14 the check imports every non-stdlib module the
-   installed package references, so nothing is skipped. `status` prints the fix
-   line with the task's own interpreter:
+   `WARNING: ... is missing modules: ...`, or the boot log shows it. Two causes:
+
+   - the dependencies were installed for a different interpreter (a user-only
+     Python, or a virtualenv);
+   - they were installed into `%APPDATA%\Python\Python312\site-packages`, the
+     per-user folder. The task runs as SYSTEM, whose user folder is a different
+     one, so it cannot see them even though `pip` says `Requirement already
+     satisfied`. The error looks like
+     `ModuleNotFoundError: No module named '_cffi_backend'`.
+
+   Since 1.0.15 the check runs with `-I`, which hides the per-user folder exactly
+   as the SYSTEM task does, and it names that cause when it applies. The fix is
+   one elevated command, printed by `status`:
+
    ```powershell
-   & "C:\Python312\python.exe" -m pip install pywin32 psutil cryptography
+   & "C:\Python312\python.exe" -m pip install --force-reinstall pywin32 psutil cryptography cffi
    ```
-   then `python -m usbkey_guard.setup_app install` again. Installing the package
+
+   Elevation matters: without it pip falls back to the per-user folder again.
+   Then `python -m usbkey_guard.setup_app install` again. Installing the package
    itself with that interpreter also works:
+
    ```powershell
    & "C:\Python312\python.exe" -m pip install -U usbkey-guard
    ```

@@ -344,28 +344,56 @@ print("OK")
 """
 
 
+def _probe(isolated: bool) -> tuple[int, str]:
+    """Import every dependency with the task's interpreter.
+
+    `isolated=True` passes `-I`, which drops the per-user site folder and
+    PYTHONPATH. That is what the SYSTEM task sees; without it a dependency
+    installed under `%APPDATA%\\Python\\...` looks fine to the installing user and
+    is invisible to the service (seen as `No module named '_cffi_backend'`).
+    """
+    modules = required_modules()
+    code = _PROBE.format(root=str(config.INSTALL_ROOT), modules=modules)
+    argv = [str(python_console())] + (["-I"] if isolated else []) + ["-c", code]
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=90)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 127, str(exc)
+    return result.returncode, (result.stdout or "") + "\n" + (result.stderr or "")
+
+
+def _missing_line(output: str) -> str:
+    for line in output.splitlines():
+        if line.startswith("MISSING:"):
+            return line[len("MISSING:"):].strip()
+    lines = [line for line in output.strip().splitlines() if line.strip()]
+    return lines[-1] if lines else "unknown import error"
+
+
+def dependency_fix(python: Path | None = None) -> str:
+    """The command that puts the dependencies where the service can read them."""
+    exe = python or python_console()
+    return (f'"{exe}" -m pip install --force-reinstall '
+            "pywin32 psutil cryptography cffi")
+
+
 def interpreter_problem() -> str:
     """Empty when the task's Python can import everything the enforcer imports."""
     if not (Path(config.INSTALL_ROOT) / "usbkey_guard").is_dir():
         return (f"the install folder {config.INSTALL_ROOT} is missing or "
                 "incomplete - run install again")
-    modules = required_modules()
-    code = _PROBE.format(root=str(config.INSTALL_ROOT), modules=modules)
-    try:
-        result = subprocess.run([str(python_console()), "-c", code],
-                                capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return f"could not run {python_console()}: {exc}"
-    if result.returncode == 0:
+    code, output = _probe(isolated=True)
+    if code == 0:
         return ""
-    output = (result.stdout or "") + "\n" + (result.stderr or "")
-    for line in output.splitlines():
-        if line.startswith("MISSING:"):
-            return (f"{python_console()} is missing modules: "
-                    + line[len("MISSING:"):].strip())
-    lines = [line for line in output.strip().splitlines() if line.strip()]
-    detail = lines[-1] if lines else f"exit code {result.returncode}"
-    return (f"{python_console()} cannot import the installed package: {detail}")
+    if code == 127:
+        return f"could not run {python_console()}: {output.strip()}"
+    missing = _missing_line(output)
+    plain_code, _ = _probe(isolated=False)
+    if plain_code == 0:
+        return (f"{python_console()} can import the package only from your "
+                f"user-profile folder ({missing}), and the SYSTEM service "
+                "cannot read that folder")
+    return f"{python_console()} is missing modules: {missing}"
 
 
 def boot_log_path() -> Path:
@@ -454,8 +482,10 @@ def print_service_diagnosis(info: dict | None = None) -> None:
             target = Path(command.strip().strip('"')).with_name("python.exe") \
                 if command else python_console()
             print("  PROBLEM: that Python cannot import '" + missing + "'.")
-            print('  Fix: "' + str(target) + '" -m pip install '
-                  "pywin32 psutil cryptography")
+            print("  Fix (elevated PowerShell):", dependency_fix(target))
+            print("  A package that exists only in %APPDATA%\\Python\\... is "
+                  "invisible to the")
+            print("  SYSTEM task, so it must be installed machine-wide.")
             print("  Then run install again as Administrator.")
     elif code == 0x41306:
         print("The service process was terminated (Task Manager, 'End task', or "
@@ -699,8 +729,7 @@ def install() -> int:
         print()
         print("WARNING:", problem)
         print("The service would start and exit immediately.")
-        print('Fix: "' + str(python_console()) + '" -m pip install '
-              "pywin32 psutil cryptography")
+        print("Fix (elevated PowerShell):", dependency_fix())
         print("Then run install again.")
     rc = _create_task()
     if rc != 0:

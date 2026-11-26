@@ -344,6 +344,65 @@ def test_interpreter_problem_reports_a_missing_install_folder(tmp_path, monkeypa
     assert "run install again" in sa.interpreter_problem()
 
 
+def test_probe_asks_for_an_isolated_interpreter(fake_install, monkeypatch):
+    """`-I` drops the per-user site folder, which is what SYSTEM cannot read."""
+    seen = []
+
+    def fake_run(argv, **kwargs):
+        seen.append(list(argv))
+        return types.SimpleNamespace(returncode=0, stdout="OK\n", stderr="")
+
+    monkeypatch.setattr(sa, "python_console", lambda: Path("python.exe"))
+    monkeypatch.setattr(sa.subprocess, "run", fake_run)
+    assert sa.interpreter_problem() == ""
+    assert seen == [["python.exe", "-I", "-c", seen[0][-1]]]
+
+
+def test_interpreter_problem_detects_a_per_user_only_install(fake_install,
+                                                             monkeypatch):
+    """The laptop case: importable as the user, invisible to the SYSTEM task."""
+    def fake_run(argv, **kwargs):
+        if "-I" in argv:
+            return types.SimpleNamespace(
+                returncode=3, stdout="",
+                stderr="ModuleNotFoundError: No module named '_cffi_backend'")
+        return types.SimpleNamespace(returncode=0, stdout="OK\n", stderr="")
+
+    monkeypatch.setattr(sa, "python_console",
+                        lambda: Path(r"C:\Python312\python.exe"))
+    monkeypatch.setattr(sa.subprocess, "run", fake_run)
+    message = sa.interpreter_problem()
+    assert "_cffi_backend" in message
+    assert "user-profile" in message
+    assert "SYSTEM" in message
+
+
+def test_dependency_fix_names_every_package_and_reinstalls():
+    command = sa.dependency_fix(Path(r"C:\Python312\python.exe"))
+    assert command.startswith('"C:\\Python312\\python.exe" -m pip install')
+    assert "--force-reinstall" in command
+    for name in ("pywin32", "psutil", "cryptography", "cffi"):
+        assert name in command
+
+
+def test_diagnosis_prints_the_elevated_fix_line(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sa.config, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(sa, "interpreter_is_shared", lambda: True)
+    log = tmp_path / "logs" / "enforcer-boot.log"
+    log.parent.mkdir(parents=True)
+    log.write_text("ModuleNotFoundError: No module named '_cffi_backend'",
+                   encoding="utf-8")
+    sa.print_service_diagnosis({
+        "exists": True, "state": 3, "last_result": 1,
+        "last_run": None, "xml": _task_xml(),
+    })
+    out = capsys.readouterr().out
+    assert "_cffi_backend" in out
+    assert "elevated PowerShell" in out
+    assert "--force-reinstall" in out and "cffi" in out
+    assert "APPDATA" in out
+
+
 def test_await_identity_waits_for_enrollment():
     seq = [{"identity": None}, {"identity": {"serial": "x"}}]
     slept = []

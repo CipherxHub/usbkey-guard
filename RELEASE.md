@@ -1,6 +1,6 @@
 # Release build notes
 
-Package: `usbkey-guard` 1.0.14 (pip-installable, Windows only)
+Package: `usbkey-guard` 1.0.15 (pip-installable, Windows only)
 
 ## What is included
 
@@ -16,11 +16,12 @@ Package: `usbkey-guard` 1.0.14 (pip-installable, Windows only)
   started), state-folder permissions, `uninstall --purge` for a full removal
 - `config.py` - all paths overridable by `USBKEY_STATE` / `USBKEY_INSTALL`
 - `README.md`, `INSTALL.md`, `QUICKSTART.md`, `LIMITATIONS.md`, `LICENSE`
-- 158 automated tests including source-level no-destructive guard, crash replay,
+- 162 automated tests including source-level no-destructive guard, crash replay,
   unique vault IDs, path/manifest traversal, all-or-nothing unlock, verified
   unprotect, second-PC key adopt (including a different volume GUID and a legacy
   key file), cross-machine vault keys, state-permission repair, service start and
-  a source-wide dependency scan (every non-stdlib import in the package), task XML
+  a source-wide dependency scan (every non-stdlib import in the package, probed
+  both isolated and normally so a per-user-only install is caught), task XML
   registration (battery, triggers, watchdog, restart, escaping), service diagnosis
   (missing interpreter, Store alias, missing bootstrap, boot-log tail, missing
   module), locale-proof task state, the install preflight, the enrollment wait,
@@ -31,7 +32,7 @@ Package: `usbkey-guard` 1.0.14 (pip-installable, Windows only)
 ## Verified
 
 - `pip install -e .` succeeds
-- `python -m pytest tests -q` -> 157 passed, 1 skipped here (the mutual-exclusion
+- `python -m pytest tests -q` -> 161 passed, 1 skipped here (the mutual-exclusion
   test skips itself on a PC where the real enforcer is already running)
 - `python -m usbkey_guard --help` works
 - convert -> verify -> unlock -> lock round trip, including empty folders, a
@@ -41,6 +42,27 @@ Package: `usbkey-guard` 1.0.14 (pip-installable, Windows only)
 - attach --work-dir restores a vault made on another machine into a new folder
 - manifests written by 1.0.1 (no `kdf` key) still unlock
 - TUI first-run correctly detects a removable drive and offers it for enrollment
+
+## Fixed in 1.0.15
+
+The laptop got past the `cryptography` check and then failed with
+`ModuleNotFoundError: No module named '_cffi_backend'`, even though `pip` said
+`Requirement already satisfied`. The package was there — in
+`%APPDATA%\Python\Python312\site-packages`, the per-user folder that a SYSTEM
+task cannot read. Every check the tool ran used the installing user's
+`sys.path`, so it could not see the difference.
+
+- The dependency probe now runs with `-I` (isolated), which drops the per-user
+  site folder and `PYTHONPATH`. That is exactly what the SYSTEM task sees, so a
+  dependency that exists only under `%APPDATA%` is reported instead of passing.
+- When the package imports fine non-isolated but fails isolated, the message says
+  so in plain words: it can only be imported from the user-profile folder, and
+  the SYSTEM service cannot read that folder.
+- The fix line is now one command, with `--force-reinstall`, and it names `cffi`
+  as well: `"C:\Python312\python.exe" -m pip install --force-reinstall pywin32
+  psutil cryptography cffi`. `status` marks it as needing an elevated
+  PowerShell, because that is what makes pip write to
+  `C:\Python312\Lib\site-packages` instead of the per-user folder.
 
 ## Fixed in 1.0.14
 
