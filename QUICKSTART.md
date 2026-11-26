@@ -25,6 +25,8 @@ usbkey export-recovery D:\Recovery   # bundle to keep OFF this machine
 
 - Wrong passphrase → `InvalidTag`, nothing is written.
 - Edited file at lock time → lock refuses to delete it; your changes are preserved.
+- A file in the work folder that differs from the vault → unlock refuses to overwrite it
+  and writes nothing at all. Move it aside, then unlock again (or `--force`).
 - Reinstalled machine → `usbkey vault attach D:\Private.vault`, then unlock.
 - Lost stick → there is no recovery. Keep a second copy of `key.dat` on a spare stick
   and keep your passphrase somewhere safe.

@@ -38,15 +38,34 @@ def _confirm(args) -> bool:
     return args.dry_run or args.yes or input("Type YES to continue: ").strip().upper() == "YES"
 
 
+def _passphrase(args) -> str | None:
+    """Never require the passphrase on the command line: it leaks to the
+    process list and shell history on a shared machine."""
+    if getattr(args, "passphrase_stdin", False):
+        return sys.stdin.readline().rstrip("\r\n")
+    value = getattr(args, "passphrase", None)
+    if value:
+        print("WARNING: --passphrase is visible to other users; prefer the prompt "
+              "or --passphrase-stdin.", file=sys.stderr)
+        return value
+    return None  # vault prompts with getpass
+
+
 def cmd_doctor(args) -> int:
     print("usbkey doctor")
     print("  python       :", sys.version.split()[0])
     print("  state root   :", config.STATE_ROOT)
     print("  install root :", config.INSTALL_ROOT)
     print("  admin token  :", setup_app.is_admin())
-    print("  ACL roots    :", len(enforce.load_config()["roots"]))
-    print("  vaults       :", len(vault.list_vaults()))
-    print("  identity     :", "enrolled" if enforce.load_config().get("identity") else "NOT ENROLLED")
+    try:
+        cfg = enforce.load_config()
+        vaults = vault.list_vaults()
+    except UsbKeyError as exc:
+        print("  state        : UNREADABLE -", exc)
+        return exc.code
+    print("  ACL roots    :", len(cfg["roots"]))
+    print("  vaults       :", len(vaults))
+    print("  identity     :", "enrolled" if cfg.get("identity") else "NOT ENROLLED")
     pending = Journal().unreconciled()
     print("  journal      :", f"{len(pending)} unreconciled")
     return 4 if pending else 0
@@ -54,8 +73,9 @@ def cmd_doctor(args) -> int:
 
 def cmd_status(args) -> int:
     cfg = enforce.load_config()
-    identity = cfg.get("identity")
-    print("STATUS: key", "PRESENT on " + str(keystore.find_key(identity)) if identity and keystore.find_key(identity) else "ABSENT")
+    identity = cfg.get("identity") or {}
+    drive = keystore.find_key(identity) if identity else None
+    print("STATUS: key", ("PRESENT on " + str(drive)) if drive else "ABSENT")
     for root in cfg["roots"]:
         print(f"  ACL  {root['id']} locked={root.get('locked')} {root['path']}")
     for line in vault.status():
@@ -68,11 +88,13 @@ def cmd_enroll(args) -> int:
     if cfg.get("identity") and not args.replace:
         print("Already enrolled. Use --replace to re-enroll (existing vaults must be re-attached).")
         return 1
-    result = keystore.enroll(args.drive)
+    result = keystore.enroll(args.drive, replace=args.replace)
     cfg["identity"] = result["identity"]
     enforce.save_config(cfg)
     print("Enrolled:", result["identity"])
     print("Key file:", result["key_file"])
+    if result.get("previous_key_backup"):
+        print("Previous key backed up to:", result["previous_key_backup"])
     return 0
 
 
@@ -99,6 +121,16 @@ def cmd_protect(args) -> int:
     return 0
 
 
+def _report(lines) -> bool:
+    """Print result lines; return True if any of them failed."""
+    failed = False
+    for line in lines:
+        print(line)
+        if "FAILED" in line:
+            failed = True
+    return failed
+
+
 def cmd_lock(args) -> int:
     if not _confirm(args):
         return 1
@@ -106,12 +138,10 @@ def cmd_lock(args) -> int:
     if not args.now:
         print("Processes:", procs.stop_protected_processes(
             [r["path"] for r in cfg["roots"]], cfg["settings"]["shutdown_grace_seconds"]))
-    for line in enforce.lock_all(dry_run=args.dry_run):
-        print(line)
+    failed = _report(enforce.lock_all(dry_run=args.dry_run))
     if not args.dry_run:
-        for line in vault.lock_all():
-            print("vault:", line)
-    return 0
+        failed = _report(["vault: " + line for line in vault.lock_all()]) or failed
+    return 6 if failed else 0
 
 
 def cmd_unlock(args) -> int:
@@ -122,10 +152,9 @@ def cmd_unlock(args) -> int:
         return 2
     if not _confirm(args):
         return 1
-    for line in enforce.unlock_all(dry_run=args.dry_run, force=args.force,
-                                   stick_dir=drive if not args.dry_run else None):
-        print(line)
-    return 0
+    failed = _report(enforce.unlock_all(dry_run=args.dry_run, force=args.force,
+                                        stick_dir=drive if not args.dry_run else None))
+    return 6 if failed else 0
 
 
 def cmd_verify(args) -> int:
@@ -172,7 +201,11 @@ def cmd_export_recovery(args) -> int:
             (dest / f"acl-{rid}-restore.cmd").write_text(
                 snapshot.raw_commands(root["path"], snap), encoding="utf-8")
     for v in vault.list_vaults():
-        m = vault._manifest(v)
+        try:
+            m = vault._manifest(v)
+        except Exception as exc:
+            print("skipped vault", v.get("id"), "-", exc)
+            continue
         (dest / f"vault-{v['id']}-manifest.json").write_text(
             json.dumps(m, indent=2, sort_keys=True), encoding="utf-8")
     print("Recovery bundle:", dest)
@@ -182,13 +215,22 @@ def cmd_export_recovery(args) -> int:
 
 def cmd_vault(args) -> int:
     if args.action == "convert":
+        if not args.work_dir or not args.vault_dir:
+            print("--work-dir and --vault-dir are both required")
+            return 1
         if not args.yes:
             print("Pass --yes after confirming your backup.")
             return 1
-        m = vault.convert(args.work_dir, args.vault_dir, passphrase=args.passphrase, yes=True)
+        m = vault.convert(args.work_dir, args.vault_dir,
+                          passphrase=_passphrase(args), yes=True)
         print("Vault id:", m["id"], "files:", len(m["files"]))
+        if m.get("kept"):
+            print("Kept (changed during conversion, still plaintext):", ", ".join(m["kept"]))
         return 0
     if args.action == "attach":
+        if not args.vault_dir:
+            print("--vault-dir is required")
+            return 1
         m = vault.attach(args.vault_dir)
         print("Attached vault:", m["id"])
         return 0
@@ -200,17 +242,21 @@ def cmd_vault(args) -> int:
         print("OK" if not problems else "\n".join(problems))
         return 0 if not problems else 6
     if args.action == "lock":
-        for line in vault.lock_all():
-            print(line)
-        return 0
+        return 6 if _report(vault.lock_all()) else 0
     if args.action == "unlock":
-        for line in vault.unlock(args.vault_id, passphrase=args.passphrase):
+        if not args.vault_id:
+            print("--vault-id is required")
+            return 1
+        for line in vault.unlock(args.vault_id, passphrase=_passphrase(args),
+                                 force=args.force):
             print("restored:", line)
         return 0
     return 1
 
 
 def cmd_service(args) -> int:
+    if args.action == "harden":
+        return setup_app.main(["harden"])
     return {"install": setup_app.install, "uninstall": setup_app.uninstall,
             "status": setup_app.status}[args.action]()
 
@@ -221,30 +267,54 @@ def cmd_monitor(args) -> int:
     if not identity:
         print("not enrolled")
         return 2
-    for note in enforce.replay():
-        print("replay:", note)
+    try:
+        for note in enforce.replay():
+            print("replay:", note)
+    except Exception as exc:
+        # A broken journal must not stop the enforcer from protecting data.
+        _log.exception("journal replay failed")
+        print("replay error:", type(exc).__name__, exc)
     grace = cfg["settings"]["grace_seconds"]
     was_present = None
+    locked = False
+    retry_at = 0.0
     while True:
-        drive = keystore.find_key(identity)
-        present = drive is not None
-        if present != was_present:
-            print("key", "PRESENT" if present else "ABSENT", time.strftime("%H:%M:%S"))
+        try:
+            drive = keystore.find_key(identity)
+            present = drive is not None
             if present:
-                for line in enforce.unlock_all(stick_dir=drive):
-                    print(line)
+                if was_present is not True:
+                    print("key PRESENT", time.strftime("%H:%M:%S"))
+                    for line in enforce.unlock_all(stick_dir=drive):
+                        print(line)
+                was_present = True
+                locked = False
+                retry_at = 0.0
             else:
-                time.sleep(grace)
-                if keystore.find_key(identity) is None:
+                if was_present is None:
+                    print("key ABSENT", time.strftime("%H:%M:%S"))
+                elif was_present:
+                    print("key ABSENT", time.strftime("%H:%M:%S"))
+                    time.sleep(grace)
+                # Keep retrying while the stick stays out: a file that was busy
+                # on the first attempt must still be wiped a few seconds later.
+                if (not locked and time.time() >= retry_at
+                        and keystore.find_key(identity) is None):
                     current = enforce.load_config()
                     print("Processes:", procs.stop_protected_processes(
                         [r["path"] for r in current["roots"]],
                         current["settings"]["shutdown_grace_seconds"]))
-                    for line in enforce.lock_all():
-                        print(line)
-                    for line in vault.lock_all():
-                        print("vault:", line)
-            was_present = present
+                    failed = _report(enforce.lock_all())
+                    failed = _report(["vault: " + line for line in vault.lock_all()]) or failed
+                    locked = not failed
+                    if failed:
+                        retry_at = time.time() + 15
+                was_present = False
+        except Exception as exc:
+            # A single bad root or unreadable manifest must not stop the
+            # enforcer from protecting everything else on the next cycle.
+            _log.exception("monitor cycle failed")
+            print("monitor error:", type(exc).__name__, exc)
         if args.once:
             break
         time.sleep(1)
@@ -314,11 +384,15 @@ def build_parser() -> argparse.ArgumentParser:
     va.add_argument("--vault-dir")
     va.add_argument("--vault-id")
     va.add_argument("--passphrase")
+    va.add_argument("--passphrase-stdin", action="store_true",
+                    help="read the passphrase from stdin (safer than --passphrase)")
+    va.add_argument("--force", action="store_true",
+                    help="unlock: overwrite files that differ from the vault")
     va.add_argument("--yes", action="store_true")
     va.set_defaults(func=cmd_vault)
 
     sv = sub.add_parser("service")
-    sv.add_argument("action", choices=["install", "uninstall", "status"])
+    sv.add_argument("action", choices=["install", "uninstall", "status", "harden"])
     sv.set_defaults(func=cmd_service)
 
     mo = sub.add_parser("monitor")

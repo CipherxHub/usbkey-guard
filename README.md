@@ -36,5 +36,31 @@ Encryption is written and verified before any plaintext is removed. Locking neve
 a file that changed since unlock. State is journaled with write-ahead records and can be
 reconciled after a crash.
 
+Guard rails that refuse to run instead of guessing:
+
+- OS-owned trees (`Windows`, `Program Files`, `ProgramData`, the profiles root), drive
+  roots, registry hives and the tool's own state are never encrypted.
+- Reparse points/junctions are never followed, and the vault folder may not overlap the
+  data being encrypted.
+- A vault manifest that points outside its own work folder, at a reserved device name,
+  or at a system path is rejected before a single byte is written.
+- Unlock verifies every ciphertext first and refuses to overwrite files that differ from
+  the vault (`--force` to override). Lock keeps changed files and reports them.
+- A corrupt state file is copied aside and reported; it is never silently reset.
+
 This is protection **at rest**. It is not a defence against keyloggers, a copied already-
 unlocked file, or an attacker with your passphrase.
+
+## Command line
+
+```powershell
+usbkey status
+usbkey vault convert --work-dir D:\Private --vault-dir D:\Private.vault --yes
+usbkey vault unlock --vault-id <id>            # passphrase is prompted, not echoed
+usbkey vault lock
+usbkey vault verify
+usbkey export-recovery D:\Recovery
+```
+
+Prefer the hidden prompt. `--passphrase-stdin` reads one line from stdin for scripts;
+`--passphrase` still works but is visible to other users in the process list.

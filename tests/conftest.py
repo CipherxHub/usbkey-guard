@@ -11,9 +11,9 @@ def isolated_state(tmp_path, monkeypatch):
     import usbkey_guard.snapshot as snapshot
     import usbkey_guard.vault as vault
 
-    monkeypatch.setattr(config, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "STATE_ROOT", tmp_path / "state")
     monkeypatch.setattr(config, "INSTALL_ROOT", tmp_path / "install")
-    monkeypatch.setattr(paths, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(paths, "STATE_ROOT", tmp_path / "state")
     monkeypatch.setattr(vault, "CONFIG", tmp_path / "vaults.json")
     monkeypatch.setattr(vault, "BACKUP", tmp_path / "vault-backup")
     monkeypatch.setattr(journal, "WAL", tmp_path / "journal" / "wal.log")

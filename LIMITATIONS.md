@@ -28,3 +28,23 @@ available for folders that are not encrypted, but it is only a deterrent.
 `passphrase + USB secret + volume GUID + serial`. Copying `key.dat` to another stick
 does not work because the derivation is bound to the original volume identity. A determined
 attacker could clone the stick's identity; a hardware token would be needed to prevent that.
+
+Re-enrolling a stick that already holds `key.dat` is refused unless you explicitly confirm
+overwriting it, because the old key is the only thing that can decrypt vaults made with it.
+The previous file is copied to `%PROGRAMDATA%\usbkey\keystore-backup` first, but that copy
+only helps if you put it back on the same stick.
+
+## State folder
+
+`%PROGRAMDATA%\usbkey` holds only metadata: volume identity, vault paths, salts, hashes and
+ACL snapshots. It never holds a key or a passphrase. It is writable by users by default so
+that unprivileged users can create their own vaults; run `usbkey-setup harden` if you would
+rather trade that for admin-only vault management.
+
+## Vault folders you did not create
+
+`usbkey vault attach` validates the manifest before registering it. The folder it restores
+into must not be a system path, a drive root, a reparse point or the tool's own state, and
+every file entry must stay inside that folder. A vault handed to you by someone else still
+only contains ciphertext until you supply your own stick and passphrase, so attaching one
+cannot decrypt anything by itself.

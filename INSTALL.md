@@ -23,12 +23,22 @@ usbkey-setup install
 
 Either form registers `usbkey`, `usbkey-tui` and `usbkey-setup`.
 `usbkey-setup install`:
-- copies the package to `C:\Program Files\usbkey`
-- adds a Start menu entry named `usbkey TUI`
+- copies the package to `C:\Program Files\usbkey\usbkey_guard`
+- adds an all-users Start menu entry named `usbkey TUI`
 - creates the SYSTEM scheduled task `usbkey-enforcer` (starts at boot, watches the USB stick)
+
+The task and the Start menu entry run bootstrap scripts from
+`C:\Program Files\usbkey`, so the installed copy is what executes even when pip
+installed into one user's profile. The launcher falls back to `py`/`python` if the
+installing interpreter is not readable by another user.
 
 State (identity, vault manifests, journal, logs) lives in `C:\ProgramData\usbkey`.
 Override it with `USBKEY_STATE` before importing if you need a different location.
+
+`usbkey-setup harden` (optional, Administrator) restricts the state folder to
+Administrators, SYSTEM and its owner, so unprivileged users cannot add or edit vault
+registrations. The trade-off is that non-admin users can then no longer create new
+vaults; the default leaves the folder as a normal ProgramData directory.
 
 If your organisation blocks generated `.exe` launchers (Application Control / WDAC), use the
 module forms instead — they are equivalent:

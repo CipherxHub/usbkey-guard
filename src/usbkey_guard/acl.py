@@ -102,8 +102,10 @@ def apply_unlock(path: str, snap: dict[str, Any], dry_run: bool = False) -> None
         _log.info("DRY-RUN unlock %s: remove deny %s, owner -> %s", path, USERS_SID, snap["owner"])
         return
     enable_privileges()
-    if not is_locked(path):
-        _log.info("not locked, no-op: %s", path)
+    # Compare against the snapshot, not just "is a deny ACE present": an owner
+    # that drifted to SYSTEM with no deny ACE still has to be restored.
+    if matches_snapshot(path, snap):
+        _log.info("already matches snapshot, no-op: %s", path)
         return
     snapshot.restore(path, snap)
     if is_locked(path):
@@ -146,4 +148,64 @@ def matches_snapshot(path: str, snap: dict[str, Any]) -> bool:
         return saved <= now
     except Exception as exc:
         _log.error("snapshot comparison failed: %s", exc)
+        return False
+
+
+# --------------------------------------------------------------------------
+# state-root hardening (not a protected object; the tool's own metadata)
+# --------------------------------------------------------------------------
+ADMINS_SID = "S-1-5-32-544"
+FILE_ALL = 0x001F01FF
+FILE_READ_EXEC = 0x001200A9
+_PROTECTED_DACL = getattr(win32security, "PROTECTED_DACL_SECURITY_INFORMATION", 0x80000000)
+
+
+def harden_state_root(path: str) -> bool:
+    """Restrict the tool's state folder to SYSTEM, Administrators and the owner.
+
+    `BUILTIN\\Users` keeps read+execute so unprivileged users can run status
+    checks, but cannot add or remove vaults, ACL roots or journal entries.
+    Best effort: never raises, and restores the previous DACL on failure.
+    """
+    original = None
+    try:
+        enable_privileges()
+        sd = win32security.GetNamedSecurityInfo(
+            path, win32security.SE_FILE_OBJECT,
+            win32security.OWNER_SECURITY_INFORMATION | win32security.DACL_SECURITY_INFORMATION,
+        )
+        original = sd.GetSecurityDescriptorDacl()
+        owner = sd.GetSecurityDescriptorOwner()
+        admin = win32security.ConvertStringSidToSid(ADMINS_SID)
+        users = win32security.ConvertStringSidToSid(USERS_SID)
+        dacl = win32security.ACL()
+        seen = set()
+        for sid in (SYSTEM, admin, owner):
+            key = win32security.ConvertSidToStringSid(sid)
+            if key in seen:
+                continue
+            seen.add(key)
+            dacl.AddAccessAllowedAceEx(
+                win32security.ACL_REVISION, INHERIT, FILE_ALL, sid)
+        dacl.AddAccessAllowedAceEx(
+            win32security.ACL_REVISION, INHERIT, FILE_READ_EXEC, users)
+        win32security.SetNamedSecurityInfo(
+            path, win32security.SE_FILE_OBJECT,
+            win32security.DACL_SECURITY_INFORMATION | _PROTECTED_DACL,
+            None, None, dacl, None,
+        )
+        _dacl(path)  # verify we can still read it back
+        _log.info("hardened state root: %s", path)
+        return True
+    except Exception as exc:
+        _log.error("state root hardening failed for %s: %s", path, exc)
+        if original is not None:
+            try:
+                win32security.SetNamedSecurityInfo(
+                    path, win32security.SE_FILE_OBJECT,
+                    win32security.DACL_SECURITY_INFORMATION,
+                    None, None, original, None,
+                )
+            except Exception:
+                _log.error("could not restore original DACL for %s", path)
         return False

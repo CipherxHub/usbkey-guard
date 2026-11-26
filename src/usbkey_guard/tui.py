@@ -82,22 +82,24 @@ def do_enroll() -> None:
         if ask("That is not a removable drive. Type YES to use anyway: ").upper() != "YES":
             return
     keyfile = Path(drive) / config.KEY_FILENAME
+    replace = False
     if keyfile.exists():
-        if ask("A key file exists. Type OVERWRITE to replace it: ").upper() != "OVERWRITE":
+        print("\nA key file already exists on this stick.")
+        print("Replacing it makes EVERY vault created with the old key unreadable,")
+        print("even with the correct passphrase. The old file is copied into the")
+        print("state folder first, but that only helps if you put it back on this stick.")
+        if ask("Type OVERWRITE to replace it: ").upper() != "OVERWRITE":
             return
-        try:
-            keyfile.unlink()
-        except OSError as exc:
-            print("Could not remove old key file:", exc)
-            pause()
-            return
+        replace = True
     try:
         cfg = enforce.load_config()
-        result = keystore.enroll(drive)
+        result = keystore.enroll(drive, replace=replace)
         cfg["identity"] = result["identity"]
         enforce.save_config(cfg)
         print("\nEnrolled:", result["identity"])
         print("Key file:", result["key_file"])
+        if result.get("previous_key_backup"):
+            print("Previous key backed up to:", result["previous_key_backup"])
         print("\nIMPORTANT: existing encrypted vaults are bound to the old key.")
         print("They must be re-created or re-enrolled with the original stick.")
     except Exception as exc:
@@ -187,6 +189,10 @@ def do_encrypt() -> None:
     try:
         m = vault.convert(str(target), vault_raw, passphrase=pw1, yes=True)
         print("\nDONE. Vault id:", m["id"])
+        if m.get("kept"):
+            print("These files changed during conversion and were kept as plaintext:")
+            for name in m["kept"]:
+                print("  " + name)
         print("WRITE DOWN YOUR PASSPHRASE - it is never stored.")
     except Exception as exc:
         print("FAILED:", type(exc).__name__, exc)
@@ -208,8 +214,12 @@ def do_unlock() -> None:
         files = vault.unlock(v["id"], passphrase=pw)
         print("\nDONE. Restored", len(files), "file(s).")
     except Exception as exc:
-        print("FAILED:", type(exc).__name__, exc)
-        print("Wrong passphrase, wrong USB stick, or damaged ciphertext.")
+        text = str(exc)
+        print("FAILED:", type(exc).__name__, text)
+        if "refusing to overwrite" in text:
+            print("Your current files were left untouched. Move them aside and try again.")
+        else:
+            print("Wrong passphrase, wrong USB stick, or damaged ciphertext.")
     pause()
 
 
@@ -273,7 +283,7 @@ def do_export() -> None:
     pause()
 
 
-def main() -> int:
+def _main() -> int:
     if not enforce.load_config().get("identity"):
         clear()
         heading("FIRST RUN - USB KEY SETUP")
@@ -282,7 +292,8 @@ def main() -> int:
     while True:
         clear()
         heading("MAIN MENU")
-        print("USB key :", "IN  (" + str(key_drive()) + ")" if key_drive() else "OUT")
+        drive = key_drive()
+        print("USB key :", "IN  (" + str(drive) + ")" if drive else "OUT")
         print()
         print("  1) Status")
         print("  2) Select / change USB key")
@@ -304,10 +315,26 @@ def main() -> int:
             print("Bye.")
             return 0
         if choice in actions:
-            actions[choice]()
+            try:
+                actions[choice]()
+            except Exception as exc:
+                print("\nERROR:", type(exc).__name__, exc)
+                pause()
         else:
             print("Invalid choice.")
             pause()
+
+
+def main() -> int:
+    try:
+        return _main()
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        return 130
+    except Exception as exc:
+        print("\nusbkey: fatal:", type(exc).__name__, exc)
+        print("State was not modified. Check C:\\ProgramData\\usbkey\\logs for details.")
+        return 1
 
 
 if __name__ == "__main__":

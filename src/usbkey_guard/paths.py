@@ -96,19 +96,69 @@ def cloud_markers(path: str | Path) -> list[str]:
     return found
 
 
-def protected_prefixes() -> list[str]:
-    """Directories the tool must never protect, derived from this machine."""
+_STATE_SUBDIRS = ("journal", "acl-backup", "logs", "tmp", "recovery", "vault-backup")
+_HIVE_NAMES = ("ntuser.dat", "ntuser.ini", "ntuser.dat.log1", "ntuser.dat.log2")
+
+
+def _system_prefixes() -> list[str]:
+    """OS-owned trees that must never be encrypted, locked or deleted."""
     candidates = [
         os.environ.get("WINDIR", r"C:\Windows"),
         os.environ.get("ProgramFiles", r"C:\Program Files"),
         os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
         os.environ.get("ProgramData", r"C:\ProgramData"),
+    ]
+    return sorted({os.path.normcase(str(p)) for p in candidates if p})
+
+
+def protected_prefixes() -> list[str]:
+    """Directories the tool must never protect, derived from this machine."""
+    candidates = list(_system_prefixes()) + [
         os.environ.get("USERPROFILE", r"C:\Users"),
         str(config.STATE_ROOT),
         str(config.INSTALL_ROOT),
         str(config.PACKAGE_ROOT),
     ]
     return sorted({os.path.normcase(str(p)) for p in candidates if p})
+
+
+def _tool_tree_hits(p: str) -> list[str]:
+    """Refuse the tool's own state/install trees, but not every sibling folder."""
+    hits: list[str] = []
+    for root, subdirs_only in (
+        (config.STATE_ROOT, True),
+        (config.INSTALL_ROOT, False),
+        (config.PACKAGE_ROOT, False),
+    ):
+        root_n = norm(root)
+        if p == root_n:
+            hits.append(str(root))
+        elif subdirs_only:
+            for sub in _STATE_SUBDIRS:
+                candidate = Path(root) / sub
+                if is_under(p, candidate):
+                    hits.append(str(candidate))
+        elif is_under(p, root_n):
+            hits.append(str(root))
+    return hits
+
+
+def _system_hits(p: str) -> list[str]:
+    hits = [prefix for prefix in _system_prefixes() if is_under(p, prefix)]
+    hits += _tool_tree_hits(p)
+    for marker in (r"\System Volume Information", r"\$Recycle.Bin"):
+        if marker.lower() in p.lower():
+            hits.append(marker)
+    return hits
+
+
+def nearest_existing(path: str | Path) -> str:
+    """Closest ancestor that exists, for validating not-yet-created destinations."""
+    p = Path(str(path))
+    while True:
+        if p.exists() or p.parent == p:
+            return str(p)
+        p = p.parent
 
 
 def denylist_hits(path: str | Path, allow_dummy: bool = False) -> list[str]:
@@ -149,3 +199,80 @@ def safe_target(path: str | Path, allow_dummy: bool = False) -> None:
         raise ValueError("cloud-sync path: " + ", ".join(cloud))
     if len(p) > 240:
         raise ValueError("path too long for reliable Win32 API use")
+
+
+def _check_volume(p: str, what: str) -> None:
+    if not is_ntfs(p):
+        raise ValueError(what + ": NTFS required; filesystem is "
+                         + (filesystem_of(p) or "unknown"))
+    if is_removable(p):
+        raise ValueError(what + ": removable volumes are forbidden")
+    rp = reparse_components(p)
+    if rp:
+        raise ValueError(what + ": reparse point in path chain: " + ", ".join(rp))
+    cloud = cloud_markers(p)
+    if cloud:
+        raise ValueError(what + ": cloud-sync path: " + ", ".join(cloud))
+    if len(p) > 240:
+        raise ValueError(what + ": path too long for reliable Win32 API use")
+
+
+def safe_vault_source(path: str | Path) -> None:
+    """Validate a path whose plaintext will be encrypted and then deleted.
+
+    Deliberately more permissive than `safe_target`: a user's own Documents
+    folder is a legitimate thing to encrypt. Only OS-owned trees, the profile
+    root itself, registry hives and the tool's own state are refused.
+    """
+    p = norm(path)
+    if not os.path.exists(p):
+        raise ValueError("path does not exist")
+    if os.path.isdir(p) and ntpath.splitdrive(p)[1] == "\\":
+        raise ValueError("drive roots are forbidden")
+    hits = _system_hits(p)
+    home = norm(os.environ.get("USERPROFILE", ""))
+    if home and p == home:
+        hits.append("user profile root")
+    if home:
+        users_root = norm(ntpath.dirname(home))
+        if p == users_root:
+            hits.append("all user profiles")
+    if os.path.basename(p).lower() in _HIVE_NAMES:
+        hits.append("registry hive")
+    if hits:
+        raise ValueError("protected system path: " + ", ".join(sorted(set(hits))))
+    _check_volume(p, "source")
+
+
+def safe_vault_dest(path: str | Path, source: str | Path,
+                    source_is_dir: bool) -> None:
+    """Validate where ciphertext will be written. Never inside the source."""
+    p = norm(path)
+    s = norm(source)
+    if (is_under(p, s) if source_is_dir else p == s) or is_under(s, p):
+        raise ValueError("vault folder must not overlap the data being encrypted")
+    anchor = nearest_existing(p)
+    hits = _system_hits(anchor)
+    # The destination may not exist yet, so also check it textually: a vault
+    # must never be created inside the tool's own state tree.
+    for extra in _tool_tree_hits(p):
+        if extra not in hits:
+            hits.append(extra)
+    if hits:
+        raise ValueError("protected system path: " + ", ".join(sorted(set(hits))))
+    _check_volume(anchor, "vault destination")
+
+
+def safe_vault_workdir(path: str | Path) -> None:
+    """Validate a manifest-supplied folder that plaintext will be written into.
+
+    A vault folder can be handed to `attach` by anyone, and its manifest is not
+    authenticated for `work_dir`, so this is checked on every unlock/lock.
+    """
+    p = norm(path)
+    if ntpath.splitdrive(p)[1] == "\\":
+        raise ValueError("drive roots are forbidden as a vault work folder")
+    hits = _system_hits(p)
+    if hits:
+        raise ValueError("protected system path: " + ", ".join(sorted(set(hits))))
+    _check_volume(nearest_existing(p), "vault work folder")

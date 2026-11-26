@@ -8,6 +8,7 @@ EXIT_DENIED = 5
 EXIT_VERIFY_DRIFT = 6
 EXIT_AUDIT_REFUSED = 7
 EXIT_MUTEX_HELD = 8
+EXIT_STATE_CORRUPT = 9
 
 
 class UsbKeyError(Exception):
@@ -40,3 +41,9 @@ class AuditRefused(UsbKeyError):
 
 class MutexHeld(UsbKeyError):
     code = EXIT_MUTEX_HELD
+
+
+class ConfigCorrupt(UsbKeyError):
+    """A state file exists but cannot be parsed. Never silently reset it."""
+
+    code = EXIT_STATE_CORRUPT

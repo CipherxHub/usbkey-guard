@@ -1,6 +1,6 @@
 # Release build notes
 
-Package: `usbkey-guard` 1.0.1 (pip-installable, Windows only)
+Package: `usbkey-guard` 1.0.2 (pip-installable, Windows only)
 
 ## What is included
 
@@ -8,18 +8,22 @@ Package: `usbkey-guard` 1.0.1 (pip-installable, Windows only)
 - TUI with first-run USB drive selection, encryption, unlock, lock, verify,
   attach-existing-vault, service control and recovery export
 - CLI for scripting/recovery
-- `usbkey-setup install|uninstall|status` — Program Files copy, Start menu entry,
-  SYSTEM scheduled task
+- `usbkey-setup install|uninstall|status|harden` — Program Files copy, all-users
+  Start menu entry, SYSTEM scheduled task
 - `config.py` — all paths overridable by `USBKEY_STATE` / `USBKEY_INSTALL`
 - `README.md`, `INSTALL.md`, `QUICKSTART.md`, `LIMITATIONS.md`, `LICENSE`
-- 19 automated tests including source-level no-destructive guard, crash replay,
-  unique vault IDs and ACL round-trip on a temp folder
+- 49 automated tests including source-level no-destructive guard, crash replay,
+  unique vault IDs, path/manifest traversal, all-or-nothing unlock, corrupt-state
+  handling and the installed-copy import layout
 
 ## Verified
 
 - `pip install -e .` succeeds
-- `python -m pytest tests -q` → 19 passed
+- `python -m pytest tests -q` → 49 passed
 - `python -m usbkey_guard --help` works
+- convert → verify → unlock → lock round trip, including empty folders and a
+  modified file that must survive locking
+- manifests written by 1.0.1 (no `kdf` key) still unlock
 - TUI first-run correctly detects a removable drive and offers it for enrollment
 
 ## Clean state

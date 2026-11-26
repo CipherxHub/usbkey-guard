@@ -2,9 +2,13 @@ r"""AES-GCM encrypted vault. Admin-proof: without the USB + passphrase the
 files on disk are ciphertext, so permissions are irrelevant.
 
 Safety ordering is strict:
-  1. encrypt every file and write ciphertext to the vault
-  2. verify by decrypting each ciphertext in memory and comparing hashes
-  3. only then remove plaintext originals, and only those that still match
+  1. encrypt every file, fsync the ciphertext and the manifest to disk
+  2. verify by decrypting each ciphertext from disk and comparing hashes
+  3. register the vault, then remove plaintext originals that still match
+
+Unlocking is all-or-nothing: every ciphertext is verified before a single byte
+of plaintext is written, and an existing file that differs from the vault is
+never overwritten without an explicit force.
 
 Locking likewise refuses to delete any plaintext file whose hash has changed
 since unlock, so edited work is never destroyed.
@@ -12,21 +16,72 @@ since unlock, so edited work is never destroyed.
 import getpass
 import hashlib
 import json
+import ntpath
 import os
+import re
+import stat
 import time
 from pathlib import Path
 from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from . import keystore, paths, snapshot
+from . import keystore, paths
+from .errors import ConfigCorrupt
 from .log import get_log
 
 _log = get_log("vault")
 CONFIG = paths.STATE_ROOT / "vaults.json"
 BACKUP = paths.STATE_ROOT / "vault-backup"
 NONCE_LEN = 12
-CHUNK = 64 * 1024 * 1024  # refuse files larger than 64 MB for whole-file AEAD
+MAX_FILE_BYTES = 64 * 1024 * 1024  # whole-file AEAD limit for this format
+_REPARSE = stat.FILE_ATTRIBUTE_REPARSE_POINT
+_DEVICE_NAMES = {"con", "prn", "aux", "nul", "conin$", "conout$"}
+_DEVICE_RE = re.compile(r"^(com|lpt)[1-9]$")
+
+# Manifests written before 1.0.2 have no "kdf" key and used n=2**14.
+KDF_DEFAULT = {"n": 2 ** 14, "r": 8, "p": 1}
+KDF_NEW = {"n": 2 ** 16, "r": 8, "p": 1}
+
+
+# --------------------------------------------------------------------------
+# durable, atomic state writes
+# --------------------------------------------------------------------------
+def _write_bytes_durable(path: Path, data: bytes, mode: int = 0o600) -> None:
+    """Write and fsync before returning, so a power cut cannot lose the file."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+    fd = os.open(str(path), flags, mode)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short write to " + str(path))
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_json_durable(path: Path, payload: dict[str, Any]) -> None:
+    _write_bytes_durable(
+        Path(path), json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+    )
+
+
+def _corrupt_message(path: Path, exc: Any) -> str:
+    saved = None
+    try:
+        saved = path.with_name(path.name + ".corrupt-" + time.strftime("%Y%m%d-%H%M%S"))
+        saved.write_bytes(path.read_bytes())
+    except OSError:
+        saved = None
+    tail = f" A copy was saved to {saved}." if saved else ""
+    return (
+        f"state file is corrupt: {path} ({exc}).{tail} "
+        "Nothing was deleted. Restore a good copy, or re-register your encrypted "
+        "folders with: usbkey vault attach <vault folder>"
+    )
 
 
 def _read_config() -> dict[str, Any]:
@@ -34,21 +89,70 @@ def _read_config() -> dict[str, Any]:
     if not CONFIG.exists():
         return {"vaults": []}
     try:
-        return json.loads(CONFIG.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"vaults": []}
+        cfg = json.loads(CONFIG.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigCorrupt(_corrupt_message(CONFIG, exc)) from exc
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("vaults"), list):
+        raise ConfigCorrupt(_corrupt_message(CONFIG, "unexpected structure"))
+    return cfg
 
 
 def _write_config(cfg: dict[str, Any]) -> None:
-    tmp = CONFIG.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cfg, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.replace(CONFIG)
+    tmp = CONFIG.with_name(CONFIG.name + ".tmp")
+    _write_json_durable(tmp, cfg)
+    os.replace(tmp, CONFIG)
 
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _is_reparse(path: Path) -> bool:
+    try:
+        return bool(os.lstat(str(path)).st_file_attributes & _REPARSE)
+    except (OSError, AttributeError):
+        return False
+
+
+def _reparse_below(root: Path, target: Path) -> bool:
+    """True if any component strictly below `root` is a link/junction."""
+    try:
+        parts = target.relative_to(root).parts
+    except ValueError:
+        return True
+    current = root
+    for part in parts:
+        current = current / part
+        if _is_reparse(current):
+            return True
+    return False
+
+
+def _is_device(part: str) -> bool:
+    """Win32 reserved device names resolve to devices even inside a folder."""
+    stem = part.split(".")[0].strip().lower()
+    return stem in _DEVICE_NAMES or bool(_DEVICE_RE.match(stem))
+
+
+def _safe_join(work: Path, rel: str) -> Path:
+    """Resolve a manifest-relative path, refusing traversal and absolute paths."""
+    cleaned = ntpath.normpath(rel)
+    if ntpath.isabs(cleaned) or ntpath.splitdrive(cleaned)[0]:
+        raise RuntimeError("unsafe absolute path in vault manifest: " + rel)
+    if cleaned == ".." or cleaned.startswith(".." + os.sep) or cleaned.startswith("../"):
+        raise RuntimeError("path escapes the work folder in vault manifest: " + rel)
+    for part in Path(cleaned).parts:
+        if _is_device(part):
+            raise RuntimeError("reserved device name in vault manifest: " + rel)
+    target = work / Path(cleaned)
+    if not paths.is_under(str(target), str(work)):
+        raise RuntimeError("path escapes the work folder in vault manifest: " + rel)
+    return target
+
+
+# --------------------------------------------------------------------------
+# USB material
+# --------------------------------------------------------------------------
 def _identity() -> dict[str, str]:
     from . import enforce
     return enforce.load_config().get("identity") or {}
@@ -59,78 +163,175 @@ def _usb_material() -> tuple[bytes, dict[str, str]]:
     drive = keystore.find_key(ident)
     if not drive:
         raise PermissionError("USB key not present")
-    payload = json.loads((Path(drive) / "key.dat").read_text(encoding="utf-8"))
-    return payload["secret"].encode(), ident
+    try:
+        payload = json.loads((Path(drive) / "key.dat").read_text(encoding="utf-8"))
+        return payload["secret"].encode(), ident
+    except (OSError, ValueError, KeyError) as exc:
+        raise PermissionError("USB key unreadable; re-insert it and retry") from exc
 
 
-def derive_key(passphrase: str, salt: bytes) -> bytes:
+def derive_key(passphrase: str, salt: bytes,
+               params: dict[str, Any] | None = None) -> bytes:
+    """Derive the vault key. `params` comes from the manifest so old vaults keep
+    working with their original cost; new vaults use the stronger default."""
     secret, ident = _usb_material()
     material = (
         passphrase.encode("utf-8") + b"|" + secret + b"|"
         + ident["volume_guid"].encode() + b"|" + ident["serial"].encode()
     )
-    return hashlib.scrypt(material, salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+    n, r, p = _kdf_params(params)
+    return hashlib.scrypt(
+        material, salt=salt, n=n, r=r, p=p, dklen=32,
+        maxmem=1024 * 1024 * 1024,  # a ceiling, not an allocation
+    )
+
+
+def _kdf_params(params: dict[str, Any] | None) -> tuple[int, int, int]:
+    """Clamp manifest-supplied cost parameters so a hostile manifest cannot
+    turn an unlock into an out-of-memory denial of service."""
+    source = params or KDF_DEFAULT
+    try:
+        n = int(source.get("n", KDF_DEFAULT["n"]))
+        r = int(source.get("r", KDF_DEFAULT["r"]))
+        p = int(source.get("p", KDF_DEFAULT["p"]))
+    except (TypeError, ValueError, AttributeError):
+        return KDF_DEFAULT["n"], KDF_DEFAULT["r"], KDF_DEFAULT["p"]
+    n = max(2 ** 14, min(n, 2 ** 20))
+    r = max(8, min(r, 32))
+    p = max(1, min(p, 4))
+    return n, r, p
 
 
 def _prompt() -> str:
     return getpass.getpass("Vault passphrase: ")
 
 
+# --------------------------------------------------------------------------
+# manifest helpers
+# --------------------------------------------------------------------------
 def _vault_config(vault_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
     cfg = _read_config()
     for v in cfg["vaults"]:
-        if v["id"] == vault_id:
+        if v.get("id") == vault_id:
             return cfg, v
-    raise KeyError("unknown vault: " + vault_id)
+    raise ValueError(
+        "unknown vault: " + str(vault_id)
+        + ". Run `usbkey vault status` to list registered vaults."
+    )
+
+
+def _validate_manifest(m: Any) -> dict[str, Any]:
+    if not isinstance(m, dict):
+        raise ValueError("vault manifest is not an object")
+    if not isinstance(m.get("files"), list):
+        raise ValueError("vault manifest has no file list")
+    work = m.get("work_dir")
+    if not isinstance(work, str) or not ntpath.isabs(work):
+        raise ValueError("vault manifest has an invalid work_dir")
+    if not isinstance(m.get("salt"), str):
+        raise ValueError("vault manifest has an invalid salt")
+    if not isinstance(m.get("id"), str) or not m["id"]:
+        raise ValueError("vault manifest has no id")
+    return m
 
 
 def _manifest(v: dict[str, Any]) -> dict[str, Any]:
-    return json.loads((Path(v["vault_dir"]) / "manifest.json").read_text(encoding="utf-8"))
+    p = Path(v["vault_dir"]) / "manifest.json"
+    try:
+        raw = p.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"cannot read vault manifest {p}: {exc}") from exc
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"vault manifest is not valid JSON: {p}: {exc}") from exc
+    return _validate_manifest(data)
 
 
 def _enc_path(v: dict[str, Any], name: str) -> Path:
+    if not name or ntpath.basename(name) != name or _is_device(name):
+        raise RuntimeError("invalid ciphertext name in manifest: " + str(name))
     return Path(v["vault_dir"]) / "data" / name
 
 
+def _vault_id(source: Path, vault: Path) -> str:
+    """Stable per (source, vault) pair, so re-converting cannot shadow a vault."""
+    material = paths.norm(source) + "\x00" + paths.norm(vault)
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
+def _collect(target: Path) -> tuple[list[Path], list[str]]:
+    """Every regular file plus every (possibly empty) subdirectory."""
+    if target.is_file():
+        if _is_reparse(target):
+            raise ValueError("refusing to encrypt a link: " + str(target))
+        return [target], []
+    files: list[Path] = []
+    dirs: list[str] = []
+    stack = [target]
+    while stack:
+        current = stack.pop()
+        for entry in sorted(current.iterdir()):
+            if _is_reparse(entry):
+                raise ValueError(
+                    "reparse point inside the folder; refusing to follow it: " + str(entry)
+                )
+            if entry.is_dir():
+                dirs.append(entry.relative_to(target).as_posix())
+                stack.append(entry)
+            elif entry.is_file():
+                files.append(entry)
+    return sorted(files), sorted(dirs)
+
+
+# --------------------------------------------------------------------------
+# operations
+# --------------------------------------------------------------------------
 def convert(work_dir: str, vault_dir: str, passphrase: str | None = None,
             yes: bool = False) -> dict[str, Any]:
     """Encrypt a plaintext folder into the vault and verify before removing plaintext."""
-    target = Path(work_dir)
-    vault = Path(vault_dir)
-    if target.is_file():
-        # Encrypt just this one file; the work folder is its parent.
-        work = target.parent
-        files = [target]
-    elif target.is_dir():
-        work = target
-        files = sorted(p for p in work.rglob("*") if p.is_file())
-    else:
+    target = Path(os.path.abspath(str(work_dir)))
+    vault = Path(os.path.abspath(str(vault_dir)))
+    if not target.exists():
         raise ValueError("path does not exist: " + str(target))
+    paths.safe_vault_source(str(target))
+    paths.safe_vault_dest(str(vault), str(target), target.is_dir())
     if vault.exists():
         # An empty folder is a valid destination; a populated one is never touched.
         if not (vault.is_dir() and not any(vault.iterdir())):
             raise ValueError("vault path exists and is not empty: " + str(vault))
     if not yes:
         raise PermissionError("pass --yes to confirm conversion")
+
+    work = target.parent if target.is_file() else target
+    files, dirs = _collect(target)
     for f in files:
-        if f.stat().st_size > CHUNK:
+        if f.stat().st_size > MAX_FILE_BYTES:
             raise ValueError("file too large for this vault format: " + str(f))
 
+    vid = _vault_id(target, vault)
+    cfg = _read_config()  # fail before writing anything if state is corrupt
+    if any(v.get("id") == vid for v in cfg["vaults"]):
+        raise ValueError(
+            "a vault for this source already exists (id " + vid + "). "
+            "Use `usbkey vault status`, or choose a different vault folder."
+        )
+
     salt = os.urandom(16)
-    key = derive_key(passphrase or _prompt(), salt)
+    key = derive_key(passphrase or _prompt(), salt, KDF_NEW)
     vault.mkdir(parents=True, exist_ok=True)
     (vault / "data").mkdir(exist_ok=True)
 
     manifest: dict[str, Any] = {
         "v": 1,
-        "id": hashlib.sha256(
-            (str(target) if target.is_file() else str(work)).encode("utf-8")
-        ).hexdigest()[:16],
+        "id": vid,
         "work_dir": str(work),
         "vault_dir": str(vault),
         "salt": salt.hex(),
+        "kdf": dict(KDF_NEW),
         "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source_file": str(target) if target.is_file() else None,
+        "dirs": dirs,
         "files": [],
     }
     aead = AESGCM(key)
@@ -140,7 +341,7 @@ def convert(work_dir: str, vault_dir: str, passphrase: str | None = None,
         nonce = os.urandom(NONCE_LEN)
         enc = nonce + aead.encrypt(nonce, data, rel.encode("utf-8"))
         name = f"{i:05d}.enc"
-        _enc_path({"vault_dir": str(vault)}, name).write_bytes(enc)
+        _write_bytes_durable(_enc_path({"vault_dir": str(vault)}, name), enc)
         manifest["files"].append({
             "rel": rel, "enc": name, "nonce": nonce.hex(),
             "size": len(data), "sha256": _sha(data), "enc_sha256": _sha(enc),
@@ -149,52 +350,109 @@ def convert(work_dir: str, vault_dir: str, passphrase: str | None = None,
         if aead.decrypt(nonce, enc[NONCE_LEN:], rel.encode("utf-8")) != data:
             raise RuntimeError("encryption verification failed for " + rel)
 
-    (vault / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
-    )
-    verify(manifest)
+    _write_json_durable(vault / "manifest.json", manifest)
+    verify(manifest)  # re-reads every ciphertext from disk
 
-    # Only now remove plaintext, and only the exact files just verified.
-    for entry in manifest["files"]:
-        target = work / entry["rel"]
-        if target.is_file() and _sha(target.read_bytes()) == entry["sha256"]:
-            os.remove(target)
-        else:
-            raise RuntimeError("plaintext changed during conversion; refusing to delete: " + str(target))
-
-    cfg = _read_config()
+    # Register BEFORE deleting plaintext: a crash from here on leaves both
+    # copies present and the vault already known, which is the safe direction.
     cfg["vaults"].append({
         "id": manifest["id"], "work_dir": str(work), "vault_dir": str(vault),
         "source_file": manifest.get("source_file"),
     })
     _write_config(cfg)
-    BACKUP.mkdir(parents=True, exist_ok=True)
-    (BACKUP / manifest["id"]).mkdir(exist_ok=True)
-    (BACKUP / manifest["id"] / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
-    )
-    _log.info("converted %s to vault %s (%d files)", work, vault, len(files))
-    return manifest
+    backup_dir = BACKUP / manifest["id"]
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    _write_json_durable(backup_dir / "manifest.json", manifest)
+
+    kept: list[str] = []
+    for entry in manifest["files"]:
+        plain = _safe_join(work, entry["rel"])
+        if _is_reparse(plain) or not plain.is_file():
+            continue
+        if _sha(plain.read_bytes()) == entry["sha256"]:
+            os.remove(plain)
+        else:
+            kept.append(entry["rel"])
+            _log.warning("plaintext changed during conversion, kept: %s", plain)
+
+    _log.info("converted %s to vault %s (%d files, %d kept)",
+              work, vault, len(files), len(kept))
+    result = dict(manifest)
+    result["kept"] = kept
+    return result
 
 
-def unlock(vault_id: str, passphrase: str | None = None) -> list[str]:
+def unlock(vault_id: str, passphrase: str | None = None,
+           force: bool = False) -> list[str]:
+    """Restore every file, or nothing at all if any ciphertext fails."""
     cfg, v = _vault_config(vault_id)
     m = _manifest(v)
-    key = derive_key(passphrase or _prompt(), bytes.fromhex(m["salt"]))
+    paths.safe_vault_workdir(v["work_dir"])
+    work = Path(v["work_dir"])
+    if _is_reparse(work):
+        raise RuntimeError("work folder has been replaced by a link: " + str(work))
+    key = derive_key(passphrase or _prompt(), bytes.fromhex(m["salt"]), m.get("kdf"))
     aead = AESGCM(key)
-    restored = []
+
+    # Pass 1: verify every ciphertext and GCM tag before writing one byte.
     for entry in m["files"]:
+        rel = entry["rel"]
+        _safe_join(work, rel)
         enc = _enc_path(v, entry["enc"]).read_bytes()
         if _sha(enc) != entry["enc_sha256"]:
             raise RuntimeError("ciphertext integrity failure: " + entry["enc"])
         data = aead.decrypt(bytes.fromhex(entry["nonce"]), enc[NONCE_LEN:],
-                            entry["rel"].encode("utf-8"))
+                            rel.encode("utf-8"))
         if _sha(data) != entry["sha256"]:
-            raise RuntimeError("plaintext hash failure: " + entry["rel"])
-        target = Path(v["work_dir"]) / entry["rel"]
+            raise RuntimeError("plaintext hash failure: " + rel)
+
+    # Pass 2: refuse to clobber work that is not already the vaulted version.
+    conflicts: list[str] = []
+    blocked: list[str] = []
+    for entry in m["files"]:
+        target = _safe_join(work, entry["rel"])
+        if _reparse_below(work, target):
+            raise RuntimeError("refusing to write through a link: " + str(target))
+        if target.exists():
+            if not target.is_file():
+                # A directory (or device) is never safe to overwrite, even with force.
+                blocked.append(str(target) + " (not a regular file)")
+            elif _sha(target.read_bytes()) != entry["sha256"]:
+                conflicts.append(str(target))
+    if blocked:
+        raise RuntimeError(
+            "refusing to replace non-file entries: " + ", ".join(blocked[:5])
+        )
+    if conflicts and not force:
+        shown = ", ".join(conflicts[:5])
+        more = "" if len(conflicts) <= 5 else f" (+{len(conflicts) - 5} more)"
+        raise RuntimeError(
+            "refusing to overwrite files that differ from the vault: " + shown + more
+            + ". Copy them aside, or use force if you are sure."
+        )
+
+    for rel in m.get("dirs", []):
+        folder = _safe_join(work, rel)
+        if _reparse_below(work, folder):
+            raise RuntimeError("refusing to create a folder through a link: " + str(folder))
+        folder.mkdir(parents=True, exist_ok=True)
+
+    restored: list[str] = []
+    for entry in m["files"]:
+        rel = entry["rel"]
+        target = _safe_join(work, rel)
+        if target.is_file() and _sha(target.read_bytes()) == entry["sha256"]:
+            restored.append(rel)  # already identical, no write needed
+            continue
+        enc = _enc_path(v, entry["enc"]).read_bytes()
+        data = aead.decrypt(bytes.fromhex(entry["nonce"]), enc[NONCE_LEN:],
+                            rel.encode("utf-8"))
+        if _sha(data) != entry["sha256"]:
+            raise RuntimeError("plaintext hash failure: " + rel)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-        restored.append(entry["rel"])
+        _write_bytes_durable(target, data)
+        restored.append(rel)
+
     _log.info("unlocked vault %s (%d files)", vault_id, len(restored))
     return restored
 
@@ -203,46 +461,75 @@ def lock(vault_id: str) -> list[str]:
     """Remove plaintext, but only when it still matches the verified ciphertext."""
     cfg, v = _vault_config(vault_id)
     m = _manifest(v)
-    removed = []
+    paths.safe_vault_workdir(v["work_dir"])
+    work = Path(v["work_dir"])
+    if _is_reparse(work):
+        raise RuntimeError("work folder has been replaced by a link: " + str(work))
+    removed: list[str] = []
+    kept: list[str] = []
     for entry in m["files"]:
-        target = Path(v["work_dir"]) / entry["rel"]
-        if not target.is_file():
+        target = _safe_join(work, entry["rel"])
+        if not target.is_file() or _is_reparse(target):
             continue
         if _sha(target.read_bytes()) != entry["sha256"]:
             _log.error("refusing to delete modified file: %s", target)
-            raise RuntimeError(
-                "file changed since unlock, not deleting to avoid data loss: " + str(target)
-            )
+            kept.append(str(target))
+            continue
         os.remove(target)
         removed.append(entry["rel"])
+    if kept:
+        raise RuntimeError(
+            "file changed since unlock, not deleting to avoid data loss: "
+            + ", ".join(kept)
+        )
     _log.info("locked vault %s (%d files removed)", vault_id, len(removed))
     return removed
 
 
 def lock_all() -> list[str]:
-    out = []
-    for v in _read_config()["vaults"]:
-        out += [f"{v['id']}: {name}" for name in lock(v["id"])]
+    out: list[str] = []
+    try:
+        vaults = _read_config()["vaults"]
+    except ConfigCorrupt as exc:
+        return ["FAILED: " + str(exc)]
+    for v in vaults:
+        try:
+            out += [f"{v.get('id')}: {name}" for name in lock(v["id"])]
+        except Exception as exc:
+            _log.exception("lock failed for %s", v.get("id"))
+            out.append(f"{v.get('id')}: FAILED {exc}")
     return out
 
 
 def verify(vault_id: str | dict[str, Any] | None = None) -> list[str]:
     problems: list[str] = []
-    vaults = _read_config()["vaults"]
+    try:
+        vaults = _read_config()["vaults"]
+    except ConfigCorrupt as exc:
+        return [str(exc)]
     if isinstance(vault_id, str):
-        vaults = [v for v in vaults if v["id"] == vault_id]
+        vaults = [v for v in vaults if v.get("id") == vault_id]
     elif isinstance(vault_id, dict):
         vaults = [{"id": vault_id["id"], "work_dir": vault_id["work_dir"],
                    "vault_dir": vault_id["vault_dir"]}]
     for v in vaults:
-        m = _manifest(v)
+        try:
+            m = _manifest(v)
+        except Exception as exc:
+            problems.append(f"{v.get('id')}: manifest unreadable: {exc}")
+            continue
+        work = Path(v["work_dir"])
         for entry in m["files"]:
-            p = _enc_path(v, entry["enc"])
-            if not p.is_file():
-                problems.append(f"{v['id']}: missing ciphertext {entry['enc']}")
-            elif _sha(p.read_bytes()) != entry["enc_sha256"]:
-                problems.append(f"{v['id']}: ciphertext hash mismatch {entry['enc']}")
-            plaintext = Path(v["work_dir"]) / entry["rel"]
+            try:
+                p = _enc_path(v, entry["enc"])
+                if not p.is_file():
+                    problems.append(f"{v['id']}: missing ciphertext {entry['enc']}")
+                elif _sha(p.read_bytes()) != entry["enc_sha256"]:
+                    problems.append(f"{v['id']}: ciphertext hash mismatch {entry['enc']}")
+                plaintext = _safe_join(work, entry["rel"])
+            except Exception as exc:
+                problems.append(f"{v['id']}: {exc}")
+                continue
             if plaintext.is_file() and _sha(plaintext.read_bytes()) != entry["sha256"]:
                 problems.append(f"{v['id']}: plaintext differs from vault {entry['rel']}")
     return problems
@@ -250,14 +537,26 @@ def verify(vault_id: str | dict[str, Any] | None = None) -> list[str]:
 
 def attach(vault_dir: str) -> dict[str, Any]:
     """Register an existing encrypted folder (recovery / reinstall)."""
-    m = _manifest({"vault_dir": vault_dir})
+    vd = Path(os.path.abspath(str(vault_dir)))
+    if not (vd / "manifest.json").is_file():
+        raise ValueError(
+            "no manifest.json in " + str(vd) + "; that folder is not a vault"
+        )
+    m = _manifest({"vault_dir": str(vd)})
+    # The manifest is only authenticated for the file contents, not for the
+    # folder it restores into, so validate it before registering.
+    paths.safe_vault_workdir(m["work_dir"])
+    work = Path(m["work_dir"])
+    for entry in m["files"]:
+        _safe_join(work, entry["rel"])
+        _enc_path({"vault_dir": str(vd)}, entry["enc"])
     cfg = _read_config()
-    if any(v["id"] == m["id"] for v in cfg["vaults"]):
+    if any(v.get("id") == m["id"] for v in cfg["vaults"]):
         raise ValueError("vault already registered: " + m["id"])
     cfg["vaults"].append({
         "id": m["id"],
         "work_dir": m["work_dir"],
-        "vault_dir": str(vault_dir),
+        "vault_dir": str(vd),
         "source_file": m.get("source_file"),
     })
     _write_config(cfg)
@@ -265,17 +564,34 @@ def attach(vault_dir: str) -> dict[str, Any]:
 
 
 def list_vaults() -> list[dict[str, Any]]:
-    """Public read-only list of configured vaults."""
+    """Public read-only list of configured vaults.
+
+    Raises ConfigCorrupt rather than pretending there are no vaults: silently
+    returning an empty list would let the next write wipe every registration.
+    """
     return list(_read_config()["vaults"])
 
 
 def status() -> list[str]:
     lines = []
-    for v in _read_config()["vaults"]:
-        m = _manifest(v)
-        present = sum(
-            1 for e in m["files"] if (Path(v["work_dir"]) / e["rel"]).is_file()
-        )
+    try:
+        vaults = _read_config()["vaults"]
+    except ConfigCorrupt as exc:
+        return ["config error: " + str(exc)]
+    for v in vaults:
+        try:
+            m = _manifest(v)
+        except Exception as exc:
+            lines.append(f"{v.get('id')}  UNKNOWN  manifest unreadable: {exc}")
+            continue
+        work = Path(v["work_dir"])
+        present = 0
+        for e in m["files"]:
+            try:
+                if _safe_join(work, e["rel"]).is_file():
+                    present += 1
+            except RuntimeError:
+                continue
         state = "UNLOCKED" if present else "LOCKED"
         label = v.get("source_file") or v["work_dir"]
         lines.append(f"{v['id']}  {state}  {present}/{len(m['files'])} files  {label}")
