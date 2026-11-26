@@ -2,9 +2,9 @@
 
 1. Plug in the USB stick you want to use as the key.
 2. Run `python -m usbkey_guard` (or `usbkey-tui`).
-3. Accept the one-time Administrator prompt if it appears. This installs the
-   Start menu entry and the background service that re-locks folders when the
-   stick is pulled.
+3. Accept the one-time Administrator prompt if it appears. A small window
+   installs the Start menu entry and the background service that re-locks folders
+   when the stick is pulled; the menu waits and then continues by itself.
 4. If asked, select the removable drive from the list. This writes `key.dat` to it.
 5. Choose **3) Encrypt a file or folder**.
    - Enter the path, e.g. `D:\Private`
@@ -26,6 +26,18 @@ python -m usbkey_guard export-recovery D:\Recovery          # bundle to keep off
 ```
 
 If `usbkey` itself is on `PATH`, the short forms are identical.
+
+## Upgrading
+
+```powershell
+pip install -U usbkey-guard
+python -m usbkey_guard
+```
+
+The installed copy records its version. If it is older than the package you just
+installed, the menu says so and offers to refresh the system copy and service
+(one UAC prompt). Answer Enter, and it continues into the menu when the install
+finishes.
 
 To stop protecting something you no longer need, use **8) Stop protecting a vault**
 (or `vault remove`). It decrypts the files, deletes the encrypted copy, and

@@ -29,6 +29,10 @@ The task runs the Python that performed the install. If that Python is inside a
 user profile, only that account can start the TUI from the Start menu; the
 service itself still runs as SYSTEM. Use a machine-wide Python on a shared PC.
 
+The installed copy is a snapshot. After `pip install -U usbkey-guard`, open
+`python -m usbkey_guard` once so it can refresh the system copy; the menu
+detects the version difference and offers to do it.
+
 ## Removing protection
 
 `usbkey vault remove --vault-id <id> --yes` (TUI: *Stop protecting a vault*) decrypts

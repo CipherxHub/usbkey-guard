@@ -17,16 +17,21 @@ That is the whole install. The menu does the rest: on first start it offers the
 one-time Administrator step
 
 ```
-usbkey: the background service is not installed on this PC.
+usbkey: the system copy on this PC is missing or older than this version.
 Without it, pulling the USB stick will not re-encrypt unlocked folders.
 Windows will ask for Administrator permission.
 
 Set it up now? [Y/n]:
 ```
 
-Press Enter, approve the UAC prompt, and a separate window finishes the
-machine-wide part. Reopen `python -m usbkey_guard` when it says so. No second
-command to remember, and no separate `usbkey-setup install` step.
+Press Enter and approve the UAC prompt. A separate window installs the
+machine-wide part; the menu waits for it, prints `Installed.`, and carries on in
+the same window. No second command to remember, and no separate
+`usbkey-setup install` step.
+
+The same prompt appears after an upgrade (`pip install -U usbkey-guard`): the
+installed copy records its version, so the menu notices when the system copy is
+older and offers to refresh it.
 
 You only need the manual form if you decline that prompt, or if the automatic
 step is blocked by policy:
@@ -83,13 +88,9 @@ One caveat: both point at the Python that ran the install. If that Python is in 
 user profile (`C:\Users\<name>\...`, which is where the new Python install manager
 puts it), the Start menu entry works only for that account. Install Python from
 python.org with **Install for all users** (`C:\Program Files\Python312`) when the
-PC is shared. The menu warns when it detects this, and `python -m
-usbkey_guard.setup_app status` shows the interpreter, whether other users can use
-it, and whether the service is running.
-
-```powershell
-python -m usbkey_guard.setup_app status
-```
+PC is shared. The menu warns when it detects this, and
+`python -m usbkey_guard.setup_app status` shows the interpreter, whether other
+users can use it, and whether the service is running.
 
 State (identity, vault manifests, journal, logs) lives in `C:\ProgramData\usbkey`.
 Override it with `USBKEY_STATE` before importing if you need a different location.
@@ -98,6 +99,8 @@ Override it with `USBKEY_STATE` before importing if you need a different locatio
 Administrators, SYSTEM and its owner, so unprivileged users cannot add or edit vault
 registrations. The trade-off is that non-admin users can then no longer create new
 vaults; the default leaves the folder as a normal ProgramData directory.
+
+Module form: `python -m usbkey_guard.setup_app harden`.
 
 If your organisation blocks generated `.exe` launchers (Application Control / WDAC), use the
 module forms instead — they are equivalent:
@@ -132,13 +135,13 @@ Install the same way on the laptop (`pip install -U usbkey-guard`, then
    - CLI equivalent: `usbkey enroll --drive E:\ --use-existing`
 3. Copy the encrypted vault folder to the laptop (or use a drive it can see), then:
    ```powershell
-   usbkey vault attach --vault-dir D:\Bank.vault --work-dir C:\Users\me\Bank
-   usbkey vault unlock --vault-id <id>
+   python -m usbkey_guard vault attach --vault-dir D:\Bank.vault --work-dir C:\Users\me\Bank
+   python -m usbkey_guard vault unlock --vault-id <id>
    ```
    `--work-dir` is the folder to restore into on this machine. Without it the
    path recorded in the manifest is used, which may not exist here.
-4. Accept the Administrator prompt on the laptop's first start, so its
-   background task watches the stick too.
+4. Check the laptop's service once: `python -m usbkey_guard.setup_app status`
+   must say `Service: running`, so pulling the stick there re-locks the folder.
 
 Nothing secret is copied between machines: the vault key is derived from the
 passphrase, the stick's secret and that stick's volume identity. Copying
@@ -156,17 +159,17 @@ python -m usbkey_guard status
 `... setup_app status` must print `Service: running`. If it says `NOT running`,
 the service is not watching the stick, so nothing will be re-encrypted: open
 `python -m usbkey_guard`, choose **9) Background service → 2) Install / repair**,
-or reboot. `usbkey status` must list the vault you expect.
+or reboot. `python -m usbkey_guard status` must list the vault you expect.
 
 The service also waits `grace_seconds` after the stick disappears (3 by default)
 before locking, and it skips a vault whose plaintext folder is missing.
 
 ## If the Start menu entry does nothing
 
-`usbkey-setup install` writes both a shortcut (`usbkey TUI.lnk`) and a fallback
+The Administrator step writes both a shortcut (`usbkey TUI.lnk`) and a fallback
 script (`usbkey TUI.bat`) to the all-users Start menu folder. If the entry is
 missing right after installing, sign out and back in (or restart Explorer) so the
-Start menu rebuilds its list. The TUI can always be started directly:
+Start menu rebuilds its list. The menu can always be started directly:
 
 ```powershell
 python "C:\Program Files\usbkey\run_tui.py"
@@ -186,20 +189,21 @@ The state files were written by SYSTEM or by an elevated session, so Windows gav
 fixed by one elevated command:
 
 ```powershell
-usbkey-setup repair-permissions
+# Administrator PowerShell
+python -m usbkey_guard.setup_app repair-permissions
 ```
 
-After that the TUI works from a normal desktop session. `usbkey-setup install`
-runs the same repair, and `usbkey-setup harden` deliberately reverses it
-(admin-only vault management).
+After that the TUI works from a normal desktop session. The Administrator step
+runs the same repair, and `python -m usbkey_guard.setup_app harden` deliberately
+reverses it (admin-only vault management).
 
 ## Uninstall
 
-Easiest: run `usbkey-tui` and choose **11) Remove usbkey from this PC**. It lists
-what will be deleted, refuses while a vault or a locked folder is still
-registered (remove that protection first, option 8), asks you to type `REMOVE`,
-then raises the UAC prompt and removes the service, the Start menu entry, the
-Program Files copy, the state folder and the Python package.
+Easiest: run `python -m usbkey_guard` and choose **11) Remove usbkey from this
+PC**. It lists what will be deleted, refuses while a vault or a locked folder is
+still registered (remove that protection first, option 8), asks you to type
+`REMOVE`, then raises the UAC prompt and removes the service, the Start menu
+entry, the Program Files copy, the state folder and the Python package.
 
 From a command line, the same removal:
 
@@ -211,7 +215,8 @@ python -m pip uninstall -y usbkey-guard
 
 `--purge` also deletes `C:\ProgramData\usbkey`. Without it the state folder is
 preserved, which is what you want if vaults still exist: reinstall, then
-`usbkey vault attach <vault folder>` registers them again.
+`python -m usbkey_guard vault attach --vault-dir <vault folder>` registers them
+again.
 
 Neither form touches your USB stick (`key.dat` stays, so existing vaults remain
 readable) or any vault folder.

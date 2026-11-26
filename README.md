@@ -15,9 +15,9 @@ python -m usbkey_guard
 ```
 
 That is all. On first start the menu offers the one-time Administrator step —
-press Enter, approve UAC, reopen the menu. It installs the all-users Start menu
-entry and the background service that re-encrypts folders when the stick is
-pulled. No separate setup command.
+press Enter and approve UAC; the menu waits for it and carries on in the same
+window. It installs the all-users Start menu entry and the background service
+that re-encrypts folders when the stick is pulled. No separate setup command.
 
 To install from a downloaded source zip instead:
 
@@ -63,6 +63,10 @@ This is protection **at rest**. It is not a defence against keyloggers, a copied
 unlocked file, or an attacker with your passphrase.
 
 ## Command line
+
+If `usbkey` is not on `PATH` (common with the new Python install manager), use
+`python -m usbkey_guard` with the same arguments, e.g.
+`python -m usbkey_guard status`.
 
 ```powershell
 usbkey status

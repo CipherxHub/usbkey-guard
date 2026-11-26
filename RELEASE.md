@@ -1,6 +1,6 @@
 # Release build notes
 
-Package: `usbkey-guard` 1.0.9 (pip-installable, Windows only)
+Package: `usbkey-guard` 1.0.10 (pip-installable, Windows only)
 
 ## What is included
 
@@ -35,6 +35,21 @@ Package: `usbkey-guard` 1.0.9 (pip-installable, Windows only)
 - attach --work-dir restores a vault made on another machine into a new folder
 - manifests written by 1.0.1 (no `kdf` key) still unlock
 - TUI first-run correctly detects a removable drive and offers it for enrollment
+
+## Added in 1.0.10
+
+Documentation only, so the published pages match the 1.0.9 behaviour:
+
+- README, INSTALL, QUICKSTART and LIMITATIONS now all show the two-line install
+  (`pip install -U usbkey-guard`, `python -m usbkey_guard`) and the exact
+  "Set it up now?" prompt. INSTALL no longer says to reopen the menu, which
+  1.0.9 made unnecessary.
+- QUICKSTART gained an **Upgrading** section and lost the mojibake that an
+  earlier encoding pass had left in it.
+- README's command-line section says how to run the same commands as
+  `python -m usbkey_guard ...` when `usbkey` is not on `PATH`.
+- Every remaining `usbkey-setup` example in the user docs has a module-form
+  equivalent next to it.
 
 ## Added in 1.0.9
 

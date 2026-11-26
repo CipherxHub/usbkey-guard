@@ -63,6 +63,12 @@ jobs:
             After an upgrade it compares the installed copy's VERSION marker with
             the running package and offers to refresh it.
 
+            Docs in 1.0.10: README, INSTALL, QUICKSTART and LIMITATIONS all show
+            that two-line install and the exact first-run prompt, QUICKSTART has
+            an Upgrading section, and the command-line examples list the
+            `python -m usbkey_guard ...` form for machines where `usbkey` is not
+            on PATH.
+
             Safety: ciphertext is flushed and verified before any plaintext is
             removed; unlock is all-or-nothing and refuses to overwrite a file
             that differs from the vault; lock keeps files edited since unlock;
