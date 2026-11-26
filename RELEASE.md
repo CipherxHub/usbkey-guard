@@ -1,6 +1,6 @@
 # Release build notes
 
-Package: `usbkey-guard` 1.0.11 (pip-installable, Windows only)
+Package: `usbkey-guard` 1.0.12 (pip-installable, Windows only)
 
 ## What is included
 
@@ -16,21 +16,22 @@ Package: `usbkey-guard` 1.0.11 (pip-installable, Windows only)
   started), state-folder permissions, `uninstall --purge` for a full removal
 - `config.py` - all paths overridable by `USBKEY_STATE` / `USBKEY_INSTALL`
 - `README.md`, `INSTALL.md`, `QUICKSTART.md`, `LIMITATIONS.md`, `LICENSE`
-- 138 automated tests including source-level no-destructive guard, crash replay,
+- 149 automated tests including source-level no-destructive guard, crash replay,
   unique vault IDs, path/manifest traversal, all-or-nothing unlock, verified
   unprotect, second-PC key adopt (including a different volume GUID and a legacy
   key file), cross-machine vault keys, state-permission repair, service start and
-  interpreter checks, task XML registration (battery, triggers, restart,
-  escaping), locale-proof task state, the install preflight, the enrollment
-  wait, removal safety, the first-run service offer, the no-argument menu entry
-  point, corrupt-state handling, the installed-copy import layout and the Start
-  menu launcher encoding
+  interpreter checks, task XML registration (battery, triggers, watchdog,
+  restart, escaping), service diagnosis (missing interpreter, Store alias,
+  missing bootstrap, boot-log tail), locale-proof task state, the install
+  preflight, the enrollment wait, removal safety, the first-run service offer,
+  the no-argument menu entry point, corrupt-state handling, the installed-copy
+  import layout and the Start menu launcher encoding
 
 ## Verified
 
 - `pip install -e .` succeeds
-- `python -m pytest tests -q` -> 138 passed (the mutual-exclusion test skips
-  itself on a PC where the real enforcer is already running)
+- `python -m pytest tests -q` -> 148 passed, 1 skipped (the mutual-exclusion
+  test skips itself on a PC where the real enforcer is already running)
 - `python -m usbkey_guard --help` works
 - convert -> verify -> unlock -> lock round trip, including empty folders, a
   modified file that must survive locking, and a vault released back to
@@ -39,6 +40,29 @@ Package: `usbkey-guard` 1.0.11 (pip-installable, Windows only)
 - attach --work-dir restores a vault made on another machine into a new folder
 - manifests written by 1.0.1 (no `kdf` key) still unlock
 - TUI first-run correctly detects a removable drive and offers it for enrollment
+
+## Fixed in 1.0.12
+
+1.0.11 made the task *startable*, but on a PC where it still did not run the
+tool only said `Service: NOT running` and left the user to guess. The usual
+reasons are environmental, not settings: the registered `pythonw.exe` no longer
+exists, it is the Microsoft Store alias (which a SYSTEM task cannot execute), or
+that interpreter cannot import `pywin32`/`psutil` because they were installed
+for one user or into a virtualenv.
+
+- `usbkey-setup status` now prints the task's actual command, flags a missing
+  interpreter, a Store alias, or a missing `run_enforcer.py`, and prints the
+  tail of `logs\enforcer-boot.log` (the enforcer's own startup traceback, since
+  `pythonw.exe` has no console). It exits 1 while the service is down.
+- The TUI refresh no longer says "Installed" and stops there: after the
+  elevated window it re-checks the service and prints the same explanation.
+- The task gained a **five-minute repetition trigger**. `RestartOnFailure` only
+  covers a process that exits with an error; a service ended from Task Manager,
+  killed by antivirus or by an update stayed down until the next boot. With
+  `MultipleInstancesPolicy=IgnoreNew` the watchdog never duplicates a healthy
+  instance.
+- `install` now returns failure (and prints the reason) when the task was
+  created but the service did not come up, instead of reporting success.
 
 ## Fixed in 1.0.11
 

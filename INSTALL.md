@@ -188,10 +188,9 @@ Next Run Time: N/A
 
 The files stay readable after the stick is pulled, and a reboot does not help.
 
-**Cause:** installs made before 1.0.11 created the task with plain
-`schtasks /create`, and Windows' defaults for a new task are *start only on AC
-power* and *stop on battery*. On a laptop that boots on battery the task never
-starts, and unplugging the charger stops it.
+**Cause, if the task was created before 1.0.11:** plain `schtasks /create` uses
+Windows' defaults *start only on AC power* and *stop on battery*. On a laptop
+that boots on battery the task never starts, and unplugging the charger stops it.
 
 **Fix:** upgrade, then reinstall once so the task is rewritten:
 
@@ -210,17 +209,51 @@ From 1.0.11 the task is registered from XML with:
   the next sign-in,
 - `StartWhenAvailable`, so a start missed while the PC was off runs afterwards.
 
+From 1.0.12 it also has a **five-minute watchdog**: if the process is killed
+(Task Manager, antivirus, an update), the task starts it again within five
+minutes instead of waiting for the next boot.
+
 Check it took effect:
 
 ```powershell
 python -m usbkey_guard.setup_app status
 ```
 
-`Service: running` and `Task state: running` are what you want. If it still
-fails, the status output now names the reason (`last result`), and the enforcer
-writes startup failures to `C:\ProgramData\usbkey\logs\enforcer-boot.log` —
-usually a Python that cannot import `pywin32`/`psutil`, which the install
-preflight also reports.
+`Service: running` is what you want.
+
+### If it still says `Service: NOT running`
+
+From 1.0.12 `status` prints the reason instead of only the state. Read that block:
+
+```
+Task command: "C:\Python312\pythonw.exe" "C:\Program Files\usbkey\run_enforcer.py"
+  PROBLEM: the task runs C:\Python312\pythonw.exe, which does not exist on this PC
+```
+
+The three causes it names, in order of how often they happen:
+
+1. **The Python moved or was uninstalled.** `PROBLEM: ... does not exist`. Install
+   Python for all users (python.org, "Install for all users"), then
+   `python -m usbkey_guard` and accept the refresh, or run install as
+   Administrator from that Python.
+2. **The task runs the Microsoft Store alias** (`...\WindowsApps\pythonw.exe`).
+   A SYSTEM task cannot execute Store aliases. Install Python from python.org
+   and run install again.
+3. **Python cannot import `pywin32` / `psutil`.** `status` prints
+   `WARNING: ... cannot import the installed package`. That happens when the
+   dependencies were installed only for your user (or into a virtualenv).
+   Install them for the same interpreter the task uses:
+   ```powershell
+   & "C:\Python312\python.exe" -m pip install pywin32 psutil cryptography
+   ```
+   then `python -m usbkey_guard.setup_app install` again.
+
+If none of those appear, the block prints the last lines of
+`C:\ProgramData\usbkey\logs\enforcer-boot.log`, which is the enforcer's own
+startup traceback (pythonw has no console, so this file is the only record).
+"Access is denied" there means a security policy or antivirus is blocking
+`pythonw.exe` for the SYSTEM account; allow the interpreter or the install
+folder, then run install again.
 
 ## If the Start menu entry does nothing
 

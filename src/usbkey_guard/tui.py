@@ -440,6 +440,11 @@ def offer_service_setup() -> bool:
     print("\nAn Administrator window is installing it. Waiting...")
     if _wait_for_install():
         print("Installed. The menu continues below.")
+        still = service_issue()
+        if still:
+            print()
+            print("But it is still not healthy:", still + ".")
+            setup_app.print_service_diagnosis()
         pause()
         return False
     print("\nStill installing. Reopen usbkey when that window finishes.")

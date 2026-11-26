@@ -92,6 +92,16 @@ TASK_XML = """<?xml version="1.0" encoding="UTF-16"?>
       <Enabled>true</Enabled>
       <Delay>PT10S</Delay>
     </LogonTrigger>
+    <!-- Watchdog: if the process is killed (Task Manager, antivirus, a crash
+         that did not restart) the task starts it again within five minutes.
+         IgnoreNew above means a healthy instance is never duplicated. -->
+    <TimeTrigger>
+      <StartBoundary>2026-01-01T00:00:00</StartBoundary>
+      <Repetition>
+        <Interval>PT5M</Interval>
+      </Repetition>
+      <Enabled>true</Enabled>
+    </TimeTrigger>
   </Triggers>
   <Actions Context="Author">
     <Exec>
@@ -299,6 +309,89 @@ def interpreter_problem() -> str:
     return (f"{python_console()} cannot import the installed package: {detail}")
 
 
+def boot_log_path() -> Path:
+    return Path(config.STATE_ROOT) / "logs" / "enforcer-boot.log"
+
+
+def _boot_log_tail(lines: int = 20) -> str:
+    try:
+        text = boot_log_path().read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    kept = text.strip().splitlines()[-lines:]
+    return "\n".join(kept)
+
+
+def task_action(xml_text: str) -> tuple[str, str]:
+    """The <Command> and <Arguments> the task actually runs."""
+    if not xml_text:
+        return "", ""
+    try:
+        root = ElementTree.fromstring(xml_text)
+    except ElementTree.ParseError:
+        return "", ""
+    ns = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+    exec_node = root.find("t:Actions/t:Exec", ns)
+    if exec_node is None:
+        return "", ""
+    command = exec_node.findtext("t:Command", "", ns).strip()
+    arguments = exec_node.findtext("t:Arguments", "", ns).strip()
+    return command, arguments
+
+
+def _action_problems(command: str, arguments: str) -> list[str]:
+    """Reasons the registered task cannot start at all, in plain words."""
+    problems = []
+    if not command:
+        return ["the task has no command recorded - run install to rewrite it"]
+    exe = Path(command.strip().strip('"'))
+    if "WindowsApps" in str(exe):
+        problems.append(
+            f"the task runs the Microsoft Store alias {exe}; a SYSTEM task "
+            "cannot execute Store aliases - install Python from python.org "
+            "and run install again"
+        )
+    elif not exe.exists():
+        problems.append(
+            f"the task runs {exe}, which does not exist on this PC "
+            "(reinstall Python, or run install from the Python you want the "
+            "service to use)"
+        )
+    script = arguments.strip().strip('"')
+    if script and script.lower().endswith(".py") and not Path(script).exists():
+        problems.append(
+            f"the task runs {script}, which is missing - run install again to "
+            "rewrite the install folder"
+        )
+    return problems
+
+
+def print_service_diagnosis(info: dict | None = None) -> None:
+    """Explain why the enforcer is not running, from the evidence on disk."""
+    info = info if info is not None else task_info()
+    print("The enforcer is NOT running: pulling the stick will not re-lock "
+          "anything right now.")
+    command, arguments = task_action(info.get("xml", ""))
+    if command:
+        print("Task command:", command, arguments)
+    problems = _action_problems(command, arguments)
+    for problem in problems:
+        print("  PROBLEM:", problem)
+    tail = _boot_log_tail()
+    if tail:
+        print("Last startup failure (" + str(boot_log_path()) + "):")
+        for line in tail.splitlines():
+            print("  " + line)
+    elif not problems:
+        print("No startup failure was logged, so the task probably never "
+              "started (a disabled task, or a policy that blocks it).")
+    if not interpreter_is_shared():
+        print("  NOTE: this Python lives in a user profile (" + str(sys.executable)
+              + "); the SYSTEM service can usually read it, but other accounts "
+              "cannot run the Start menu entry.")
+    print("Fix: run install again as Administrator, then run status.")
+
+
 def _create_task() -> int:
     """Register the enforcer task from XML, with settings that actually run."""
     script = Path(config.INSTALL_ROOT) / ENFORCER_BOOTSTRAP
@@ -352,7 +445,9 @@ def _start_service() -> int:
             print("Task state:", _state_name(info["state"]),
                   "| last result:", _explain_result(info["last_result"]))
         print("It will try again at the next boot or logon.")
-        return 0
+        print()
+        print_service_diagnosis(info)
+        return 1
     for _ in range(10):
         time.sleep(1)
         if _task_running():
@@ -364,8 +459,8 @@ def _start_service() -> int:
         print("Task state:", _state_name(info["state"]),
               "| last result:", _explain_result(info["last_result"]))
     print("Plaintext will NOT be locked when the stick is removed until it runs.")
-    print("Look for errors in", Path(config.STATE_ROOT) / "logs" / "enforcer-boot.log")
-    print("and", Path(config.STATE_ROOT) / "logs" / "usbkey.log")
+    print()
+    print_service_diagnosis(info)
     return 1
 
 
@@ -692,19 +787,14 @@ def status() -> int:
         warning = _settings_warning(info.get("xml", ""))
         if warning:
             print(warning)
-        if not running:
-            print("If it says 'ready' and 'has not run yet', the task never "
-                  "started: run install again.")
-            print("Boot and logon triggers, battery settings and the restart "
-                  "policy are rewritten by install.")
     problem = interpreter_problem()
     if problem:
         print("WARNING:", problem)
         print("The service cannot run until that Python can import the package.")
-    result = subprocess.run(["schtasks", "/query", "/tn", config.TASK_NAME, "/fo", "LIST"],
-                            capture_output=True, text=True)
-    print(result.stdout.strip() or result.stderr.strip())
-    return result.returncode
+    if not running and info.get("exists"):
+        print()
+        print_service_diagnosis(info)
+    return 0 if running else 1
 
 
 def main(argv=None) -> int:

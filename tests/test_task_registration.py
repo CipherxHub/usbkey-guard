@@ -27,6 +27,91 @@ def test_task_has_boot_and_logon_triggers():
     assert "<LogonTrigger>" in xml, "a logon must recover a missed boot start"
 
 
+def test_task_has_a_watchdog_that_restarts_a_killed_service():
+    """`schtasks /end` and a task kill do not fire RestartOnFailure."""
+    xml = _task_xml()
+    assert "<TimeTrigger>" in xml
+    assert "<Interval>PT5M<" in xml
+
+
+def test_task_action_reads_the_registered_command():
+    command, arguments = sa.task_action(_task_xml())
+    assert command == "C:\\Python312\\pythonw.exe"
+    assert arguments.endswith('run_enforcer.py"')
+
+
+def test_task_action_is_empty_for_broken_xml():
+    assert sa.task_action("<not xml") == ("", "")
+
+
+def test_action_problems_flags_a_missing_python(tmp_path):
+    problems = sa._action_problems(str(tmp_path / "gone" / "pythonw.exe"), "")
+    assert any("does not exist" in problem for problem in problems)
+
+
+def test_action_problems_flags_a_store_alias():
+    problems = sa._action_problems(
+        r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\pythonw.exe", "")
+    assert any("Store" in problem for problem in problems)
+
+
+def test_action_problems_flags_a_missing_bootstrap(tmp_path):
+    exe = tmp_path / "pythonw.exe"
+    exe.write_text("", encoding="utf-8")
+    problems = sa._action_problems(str(exe), f'"{tmp_path / "run_enforcer.py"}"')
+    assert any("run install again" in problem for problem in problems)
+
+
+def test_action_problems_is_silent_for_a_good_action(tmp_path):
+    exe = tmp_path / "pythonw.exe"
+    exe.write_text("", encoding="utf-8")
+    script = tmp_path / "run_enforcer.py"
+    script.write_text("", encoding="utf-8")
+    assert sa._action_problems(str(exe), f'"{script}"') == []
+
+
+def test_boot_log_tail_shows_the_last_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(sa.config, "STATE_ROOT", tmp_path)
+    log = tmp_path / "logs" / "enforcer-boot.log"
+    log.parent.mkdir(parents=True)
+    log.write_text("old\n" + "\n".join(f"line{i}" for i in range(40)),
+                   encoding="utf-8")
+    assert sa._boot_log_tail(5).splitlines() == [f"line{i}" for i in range(35, 40)]
+
+
+def test_boot_log_tail_is_empty_without_a_log(tmp_path, monkeypatch):
+    monkeypatch.setattr(sa.config, "STATE_ROOT", tmp_path)
+    assert sa._boot_log_tail() == ""
+
+
+def test_status_explains_a_stopped_service(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sa.config, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(sa, "task_info", lambda: {
+        "exists": True, "state": 3, "last_result": 0x80070002,
+        "last_run": None, "xml": _task_xml(),
+    })
+    monkeypatch.setattr(sa, "interpreter_problem", lambda: "")
+    monkeypatch.setattr(sa, "interpreter_is_shared", lambda: True)
+    assert sa.status() == 1
+    out = capsys.readouterr().out
+    assert "Service: NOT running" in out
+    assert "file not found" in out
+    assert "Task command:" in out
+    assert "run install again" in out
+
+
+def test_status_is_quiet_when_the_service_runs(monkeypatch, capsys):
+    monkeypatch.setattr(sa, "task_info", lambda: {
+        "exists": True, "state": sa.TASK_STATE_RUNNING, "last_result": 0x41301,
+        "last_run": "2026-01-01", "xml": _task_xml(),
+    })
+    monkeypatch.setattr(sa, "interpreter_problem", lambda: "")
+    assert sa.status() == 0
+    out = capsys.readouterr().out
+    assert "Service: running" in out
+    assert "NOT running" not in out
+
+
 def test_task_xml_is_well_formed():
     ElementTree.fromstring(_task_xml())
 
