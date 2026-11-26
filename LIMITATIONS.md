@@ -25,6 +25,11 @@ one-time Administrator step the menu offers on first start (or explicitly by
 readable. Check with `python -m usbkey_guard.setup_app status`
 (`Service: running`) and `python -m usbkey_guard status`.
 
+The task starts at boot and again at every logon, ignores battery/AC state and
+has no execution time limit (1.0.11 and later). Installs before 1.0.11 inherited
+Windows' "start only on AC power" default, which is why a laptop could boot
+without the service; running install again repairs the task.
+
 The task runs the Python that performed the install. If that Python is inside a
 user profile, only that account can start the TUI from the Start menu; the
 service itself still runs as SYSTEM. Use a machine-wide Python on a shared PC.
@@ -50,20 +55,29 @@ available for folders that are not encrypted, but it is only a deterrent.
 
 ## Key binding
 
-`key.dat` contains a random secret. The vault key is derived with scrypt from
-`passphrase + USB secret + volume GUID + serial`. Copying `key.dat` to another stick
-does not work because the derivation is bound to the original volume identity. A determined
-attacker could clone the stick's identity; a hardware token would be needed to prevent that.
+`key.dat` contains a random secret. New vaults derive their key with scrypt from
+`passphrase + USB secret + volume serial`, so the same stick opens the same vault on
+every PC. `key.dat` is bound to the stick's on-disk serial: copying it to a different
+stick does not work. A determined attacker could clone a stick's serial; a hardware
+token would be needed to prevent that.
+
+Windows reports a different *volume GUID* for the same stick on every PC (it keeps
+them in the per-machine mount-manager database), so the GUID is not used for the
+binding. Vaults made before 1.0.11 mixed that GUID into the key. They still open on the
+PC that created them, and on another PC when `key.dat` still carries the enrolling PC's
+GUID, which is the usual case after `USE`.
 
 Re-enrolling a stick that already holds `key.dat` is refused unless you explicitly confirm
 overwriting it, because the old key is the only thing that can decrypt vaults made with it.
-The previous file is copied to `%PROGRAMDATA%\usbkey\keystore-backup` first, but that copy
-only helps if you put it back on the same stick.
+The previous file is copied to `%PROGRAMDATA%\usbkey\keystore-backup` first. If you chose
+**OVERWRITE** by mistake, copy the newest `key-*.dat` from that folder (on the PC where you
+chose it) back to the stick as `key.dat`: the old vaults become readable again.
 
 On a second PC, **adopt** the existing key instead of overwriting it: `USE` in the TUI, or
 `usbkey enroll --drive E:\ --use-existing`. That registers the stick locally without
 touching `key.dat`, so vaults made on the first machine stay readable. Copying `key.dat`
-to a different stick never works, because the key is bound to the original volume identity.
+to a different stick still does not work, because the key is bound to the original
+volume serial.
 
 ## State folder
 

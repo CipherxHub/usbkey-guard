@@ -1,6 +1,6 @@
 # Release build notes
 
-Package: `usbkey-guard` 1.0.10 (pip-installable, Windows only)
+Package: `usbkey-guard` 1.0.11 (pip-installable, Windows only)
 
 ## What is included
 
@@ -16,17 +16,21 @@ Package: `usbkey-guard` 1.0.10 (pip-installable, Windows only)
   started), state-folder permissions, `uninstall --purge` for a full removal
 - `config.py` - all paths overridable by `USBKEY_STATE` / `USBKEY_INSTALL`
 - `README.md`, `INSTALL.md`, `QUICKSTART.md`, `LIMITATIONS.md`, `LICENSE`
-- 107 automated tests including source-level no-destructive guard, crash replay,
+- 138 automated tests including source-level no-destructive guard, crash replay,
   unique vault IDs, path/manifest traversal, all-or-nothing unlock, verified
-  unprotect, second-PC key adopt, state-permission repair, service start and
-  interpreter checks, removal safety, the first-run service offer, the
-  no-argument menu entry point, corrupt-state handling, the installed-copy
-  import layout and the Start menu launcher encoding
+  unprotect, second-PC key adopt (including a different volume GUID and a legacy
+  key file), cross-machine vault keys, state-permission repair, service start and
+  interpreter checks, task XML registration (battery, triggers, restart,
+  escaping), locale-proof task state, the install preflight, the enrollment
+  wait, removal safety, the first-run service offer, the no-argument menu entry
+  point, corrupt-state handling, the installed-copy import layout and the Start
+  menu launcher encoding
 
 ## Verified
 
 - `pip install -e .` succeeds
-- `python -m pytest tests -q` -> 107 passed
+- `python -m pytest tests -q` -> 138 passed (the mutual-exclusion test skips
+  itself on a PC where the real enforcer is already running)
 - `python -m usbkey_guard --help` works
 - convert -> verify -> unlock -> lock round trip, including empty folders, a
   modified file that must survive locking, and a vault released back to
@@ -35,6 +39,59 @@ Package: `usbkey-guard` 1.0.10 (pip-installable, Windows only)
 - attach --work-dir restores a vault made on another machine into a new folder
 - manifests written by 1.0.1 (no `kdf` key) still unlock
 - TUI first-run correctly detects a removable drive and offers it for enrollment
+
+## Fixed in 1.0.11
+
+The service could sit at `Status: Ready` forever: `schtasks /create` gives a new
+task Windows' defaults "start only on AC power" and "stop on battery", so a
+laptop that boots on battery never started the enforcer, and unplugging the
+charger stopped it. Pulling the stick then left plaintext readable, including
+after a reboot.
+
+- The task is now registered from XML with battery restrictions off, no
+  execution time limit, restart-on-failure (3 tries, 1 minute apart),
+  `StartWhenAvailable`, and both a **boot** and a **logon** trigger. A missed
+  boot start recovers at the next sign-in.
+- Running state is read through the Task Scheduler COM API instead of parsing
+  `schtasks` text, which is localised (on a non-English Windows the old check
+  never saw "Running").
+- `status` now prints the task state and a decoded `last result`
+  (`0x41303 = has not run yet`, `0x80070002 = file not found`, ...) and warns
+  when an old task still blocks battery starts.
+- `install` runs a preflight: the task's Python must import the installed
+  package plus `pywin32`/`psutil`, or the install says so instead of leaving a
+  service that exits instantly.
+- The enforcer bootstrap writes startup failures to
+  `C:\ProgramData\usbkey\logs\enforcer-boot.log` (pythonw has no console).
+- The monitor no longer exits when no key is enrolled yet; a boot-started
+  service waits for the first enrollment instead of dying until the next boot.
+
+`USE` on a second PC also failed with "that key file was copied from a different
+stick" for the *right* stick. Windows stores volume GUIDs in the per-machine
+mount-manager database, so the same stick reports a different GUID on every PC,
+and the old check compared those GUIDs. Vault keys mixed the GUID in as well, so
+even after a forced re-enroll a vault made on the first PC would not open on the
+second one.
+
+- `key.dat` now binds to the stick's on-disk volume serial only, and version 1
+  key files are verified with the GUID stored inside the file, not the one this
+  PC reports. `USE` therefore works on any PC, and still refuses a key copied to
+  a different stick (the two serials are printed).
+- New vaults derive the key from `passphrase + stick secret + volume serial`, so
+  the same stick and passphrase open the vault on every PC.
+- Vaults made before 1.0.11 still unlock: the old material is tried with both
+  this PC's GUID and the enrolling PC's GUID (kept in `key.dat`), before the
+  "wrong passphrase" error.
+- A failed enrollment is now logged with its traceback, and the TUI says whether
+  anything was written (adopting never touches the stick).
+- The monitor's single-instance mutex is owned by SYSTEM, so a desktop user got
+  `Access is denied` creating it; that now means "already running" instead of
+  crashing the command or letting a second monitor fight the service.
+
+If you already chose `OVERWRITE` to get past that error, the old key was saved
+before the rewrite: copy the newest `key-*.dat` from
+`C:\ProgramData\usbkey\keystore-backup` (on the PC where you chose it) back to
+the stick as `key.dat` to recover vaults made with the old key.
 
 ## Added in 1.0.10
 

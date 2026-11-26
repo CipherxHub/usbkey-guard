@@ -144,8 +144,18 @@ Install the same way on the laptop (`pip install -U usbkey-guard`, then
    must say `Service: running`, so pulling the stick there re-locks the folder.
 
 Nothing secret is copied between machines: the vault key is derived from the
-passphrase, the stick's secret and that stick's volume identity. Copying
-`key.dat` to a different stick does not work.
+passphrase, the stick's secret and the stick's on-disk serial. The same stick
+therefore opens the same vault on both PCs, and copying `key.dat` to a
+different stick does not work.
+
+If **USE** is rejected, read the message before doing anything else. "Belongs to
+a different stick" means this is not the stick that created `key.dat` (the two
+serials are printed). Do **not** choose **OVERWRITE** to get past an error: it
+replaces the secret, and every vault made with the old key becomes unreadable.
+If you already overwrote it, the previous key was saved on the PC where you
+chose OVERWRITE at
+`C:\ProgramData\usbkey\keystore-backup\key-<date>-<time>.dat`; copy the newest
+one back to the stick as `key.dat` to recover the old vaults.
 
 ## If the plaintext is still there after you pull the stick
 
@@ -163,6 +173,54 @@ or reboot. `python -m usbkey_guard status` must list the vault you expect.
 
 The service also waits `grace_seconds` after the stick disappears (3 by default)
 before locking, and it skips a vault whose plaintext folder is missing.
+
+## If the service will not start (`Service: NOT running`)
+
+Typical output on an affected PC:
+
+```
+Service: NOT running
+Task state: ready | last result: 0x00041303 (has not run yet)
+...
+Status:        Ready
+Next Run Time: N/A
+```
+
+The files stay readable after the stick is pulled, and a reboot does not help.
+
+**Cause:** installs made before 1.0.11 created the task with plain
+`schtasks /create`, and Windows' defaults for a new task are *start only on AC
+power* and *stop on battery*. On a laptop that boots on battery the task never
+starts, and unplugging the charger stops it.
+
+**Fix:** upgrade, then reinstall once so the task is rewritten:
+
+```powershell
+pip install -U usbkey-guard
+python -m usbkey_guard
+# accept the "system copy is older" prompt, or as Administrator:
+python -m usbkey_guard.setup_app install
+```
+
+From 1.0.11 the task is registered from XML with:
+
+- battery restrictions off (starts and keeps running on battery),
+- no execution time limit, restart after a failure (3 tries, 1 minute apart),
+- a **boot** trigger and a **logon** trigger, so a missed boot start recovers at
+  the next sign-in,
+- `StartWhenAvailable`, so a start missed while the PC was off runs afterwards.
+
+Check it took effect:
+
+```powershell
+python -m usbkey_guard.setup_app status
+```
+
+`Service: running` and `Task state: running` are what you want. If it still
+fails, the status output now names the reason (`last result`), and the enforcer
+writes startup failures to `C:\ProgramData\usbkey\logs\enforcer-boot.log` —
+usually a Python that cannot import `pywin32`/`psutil`, which the install
+preflight also reports.
 
 ## If the Start menu entry does nothing
 

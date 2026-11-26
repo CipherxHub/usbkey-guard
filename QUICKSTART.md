@@ -49,7 +49,10 @@ finishes.
 1. Install there: `pip install -U usbkey-guard`, then `python -m usbkey_guard` and
    accept the Administrator prompt.
 2. Plug in the same stick and open the menu. When it finds the existing key file,
-   choose **USE** — never **OVERWRITE**, which would lock your old vaults for good.
+   choose **USE** — never **OVERWRITE**, which replaces the key and locks your
+   old vaults for good. If **USE** reports an error, stop and read it: it means
+   this is not the stick that created the key file (the message shows both
+   serials), or the file is damaged.
 3. Copy the encrypted folder over, then
    `python -m usbkey_guard vault attach --vault-dir D:\Private.vault --work-dir C:\Users\me\Private`
    and unlock with your passphrase.

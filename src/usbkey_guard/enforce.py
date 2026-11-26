@@ -5,6 +5,7 @@ import os
 import time
 from typing import Any, Iterator
 
+import pywintypes
 import win32event
 import win32api
 import winerror
@@ -16,6 +17,8 @@ from .log import get_log
 _log = get_log("enforce")
 CONFIG = paths.STATE_ROOT / "config.json"
 MUTEX_NAME = "Global\\usbkey-enforcer"
+MONITOR_MUTEX_NAME = "Global\\usbkey-monitor"
+_monitor_mutex = None
 DEFAULT_SETTINGS = {"grace_seconds": 3, "shutdown_grace_seconds": 15}
 
 
@@ -69,7 +72,14 @@ def save_config(cfg: dict[str, Any]) -> None:
 
 @contextlib.contextmanager
 def single_instance(timeout_ms: int = 2000) -> Iterator[None]:
-    mutex = win32event.CreateMutex(None, True, MUTEX_NAME)
+    try:
+        mutex = win32event.CreateMutex(None, True, MUTEX_NAME)
+    except pywintypes.error as exc:
+        # A SYSTEM-owned mutex has a DACL a desktop user cannot open. That is
+        # the service working, not a reason to crash the command.
+        if getattr(exc, "winerror", None) == winerror.ERROR_ACCESS_DENIED:
+            raise MutexHeld("another enforcer instance holds the mutex") from exc
+        raise
     last = win32api.GetLastError()
     if last == winerror.ERROR_ALREADY_EXISTS:
         mutex.Close()
@@ -79,6 +89,29 @@ def single_instance(timeout_ms: int = 2000) -> Iterator[None]:
     finally:
         win32event.ReleaseMutex(mutex)
         mutex.Close()
+
+
+def claim_monitor() -> bool:
+    """Take the process-lifetime monitor slot; False when one already runs.
+
+    The per-operation mutex above serialises lock/unlock, but it does not stop a
+    second monitor (for example one left behind after the task was recreated)
+    from cycling alongside the first. This handle is held until the process
+    exits, and Windows releases it automatically.
+    """
+    global _monitor_mutex
+    try:
+        mutex = win32event.CreateMutex(None, True, MONITOR_MUTEX_NAME)
+    except pywintypes.error as exc:
+        # Access denied means the SYSTEM service owns it: a monitor is running.
+        return getattr(exc, "winerror", None) != winerror.ERROR_ACCESS_DENIED
+    except Exception:
+        return True  # cannot create it: do not block the service
+    if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
+        mutex.Close()
+        return False
+    _monitor_mutex = mutex
+    return True
 
 
 def add_root(path: str, allow_dummy: bool = False) -> dict[str, Any]:

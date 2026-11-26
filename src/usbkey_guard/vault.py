@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from . import keystore, paths, statewrite
@@ -161,31 +162,72 @@ def _identity() -> dict[str, str]:
 
 
 def _usb_material() -> tuple[bytes, dict[str, str]]:
-    ident = _identity()
+    ident = dict(_identity())
     drive = keystore.find_key(ident)
     if not drive:
         raise PermissionError("USB key not present")
     try:
         payload = json.loads((Path(drive) / "key.dat").read_text(encoding="utf-8"))
+        # The GUID stored in key.dat is the one the enrolling PC reported. A
+        # vault made before 1.0.11 was derived with it, so keep it as a
+        # fallback: the config identity is this PC's GUID, which differs.
+        ident["key_guid"] = str(payload.get("volume_guid", ""))
         return payload["secret"].encode(), ident
     except (OSError, ValueError, KeyError) as exc:
         raise PermissionError("USB key unreadable; re-insert it and retry") from exc
 
 
-def derive_key(passphrase: str, salt: bytes,
-               params: dict[str, Any] | None = None) -> bytes:
-    """Derive the vault key. `params` comes from the manifest so old vaults keep
-    working with their original cost; new vaults use the stronger default."""
-    secret, ident = _usb_material()
-    material = (
-        passphrase.encode("utf-8") + b"|" + secret + b"|"
-        + ident["volume_guid"].encode() + b"|" + ident["serial"].encode()
-    )
+# New manifests record this marker. Vaults without it were derived with the
+# volume GUID and need the legacy material (see _candidate_keys).
+KDF_BIND = "v2"
+
+
+def _kdf_material(passphrase: str, secret: bytes, ident: dict[str, str],
+                  bind: str | None, guid: str | None = None) -> bytes:
+    if bind == KDF_BIND:
+        # Passphrase + the stick's random secret + its on-disk serial. No GUID,
+        # so the same vault opens on every PC the stick is verified on.
+        return (passphrase.encode("utf-8") + b"|" + secret + b"|"
+                + ident["serial"].encode())
+    if guid is None:
+        guid = ident.get("volume_guid", "")
+    return (passphrase.encode("utf-8") + b"|" + secret + b"|"
+            + guid.encode() + b"|" + ident["serial"].encode())
+
+
+def _derive(passphrase: str, secret: bytes, ident: dict[str, str], salt: bytes,
+            params: dict[str, Any] | None, bind: str | None = None,
+            guid: str | None = None) -> bytes:
+    material = _kdf_material(passphrase, secret, ident, bind, guid)
     n, r, p = _kdf_params(params)
     return hashlib.scrypt(
         material, salt=salt, n=n, r=r, p=p, dklen=32,
         maxmem=1024 * 1024 * 1024,  # a ceiling, not an allocation
     )
+
+
+def derive_key(passphrase: str, salt: bytes,
+               params: dict[str, Any] | None = None,
+               bind: str | None = None) -> bytes:
+    """Derive the vault key. `params` comes from the manifest so old vaults keep
+    working with their original cost; new vaults use the stronger default."""
+    secret, ident = _usb_material()
+    return _derive(passphrase, secret, ident, salt, params, bind)
+
+
+def _candidate_keys(passphrase: str, manifest: dict[str, Any]) -> list[bytes]:
+    """Every key a manifest could have been made with, newest scheme first."""
+    secret, ident = _usb_material()
+    salt = bytes.fromhex(manifest["salt"])
+    params = manifest.get("kdf")
+    if manifest.get("bind") == KDF_BIND:
+        return [_derive(passphrase, secret, ident, salt, params, KDF_BIND)]
+    guids = [ident.get("volume_guid", "")]
+    stored = ident.get("key_guid", "")
+    if stored and stored not in guids:
+        guids.append(stored)
+    return [_derive(passphrase, secret, ident, salt, params, None, guid)
+            for guid in guids]
 
 
 def _kdf_params(params: dict[str, Any] | None) -> tuple[int, int, int]:
@@ -320,7 +362,7 @@ def convert(work_dir: str, vault_dir: str, passphrase: str | None = None,
         )
 
     salt = os.urandom(16)
-    key = derive_key(passphrase or _prompt(), salt, KDF_NEW)
+    key = derive_key(passphrase or _prompt(), salt, KDF_NEW, KDF_BIND)
     vault.mkdir(parents=True, exist_ok=True)
     (vault / "data").mkdir(exist_ok=True)
 
@@ -331,6 +373,7 @@ def convert(work_dir: str, vault_dir: str, passphrase: str | None = None,
         "vault_dir": str(vault),
         "salt": salt.hex(),
         "kdf": dict(KDF_NEW),
+        "bind": KDF_BIND,
         "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source_file": str(target) if target.is_file() else None,
         "dirs": dirs,
@@ -384,6 +427,29 @@ def convert(work_dir: str, vault_dir: str, passphrase: str | None = None,
     return result
 
 
+def _working_key(keys: list[bytes], m: dict[str, Any], v: dict[str, Any],
+                 work: Path) -> bytes:
+    """Pick the key that actually authenticates this vault, writing nothing."""
+    if not m["files"]:
+        return keys[0]
+    entry = m["files"][0]
+    _safe_join(work, entry["rel"])  # report traversal before a key error
+    enc = _enc_path(v, entry["enc"]).read_bytes()
+    if _sha(enc) != entry["enc_sha256"]:
+        raise RuntimeError("ciphertext integrity failure: " + entry["enc"])
+    nonce = bytes.fromhex(entry["nonce"])
+    aad = entry["rel"].encode("utf-8")
+    for key in keys:
+        try:
+            AESGCM(key).decrypt(nonce, enc[NONCE_LEN:], aad)
+        except InvalidTag:
+            continue
+        return key
+    raise RuntimeError(
+        "wrong passphrase, or this is not the USB key that created the vault"
+    )
+
+
 def unlock(vault_id: str, passphrase: str | None = None,
            force: bool = False) -> list[str]:
     """Restore every file, or nothing at all if any ciphertext fails."""
@@ -393,7 +459,7 @@ def unlock(vault_id: str, passphrase: str | None = None,
     work = Path(v["work_dir"])
     if _is_reparse(work):
         raise RuntimeError("work folder has been replaced by a link: " + str(work))
-    key = derive_key(passphrase or _prompt(), bytes.fromhex(m["salt"]), m.get("kdf"))
+    key = _working_key(_candidate_keys(passphrase or _prompt(), m), m, v, work)
     aead = AESGCM(key)
 
     # Pass 1: verify every ciphertext and GCM tag before writing one byte.

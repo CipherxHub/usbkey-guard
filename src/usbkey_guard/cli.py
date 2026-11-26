@@ -291,12 +291,33 @@ def cmd_service(args) -> int:
             "status": setup_app.status}[args.action]()
 
 
+def _await_identity(cfg: dict, sleep=None, load=None) -> dict:
+    """Wait until a key is enrolled; a boot-started service can start first."""
+    sleep = sleep or time.sleep
+    load = load or enforce.load_config
+    while not cfg.get("identity"):
+        sleep(5)
+        try:
+            cfg = load()
+        except Exception:
+            _log.exception("cannot read config while waiting for enrollment")
+    return cfg
+
+
 def cmd_monitor(args) -> int:
+    if not enforce.claim_monitor():
+        print("another enforcer is already running")
+        return 0
     cfg = enforce.load_config()
-    identity = cfg.get("identity")
-    if not identity:
-        print("not enrolled")
-        return 2
+    if not cfg.get("identity"):
+        if args.once:
+            print("not enrolled")
+            return 2
+        # The task starts at boot, which can be before the first enrollment.
+        # Exiting here would leave the service dead until the next reboot.
+        print("waiting for enrollment")
+        cfg = _await_identity(cfg)
+    identity = cfg["identity"]
     try:
         for note in enforce.replay():
             print("replay:", note)

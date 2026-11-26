@@ -85,5 +85,9 @@ usbkey enroll --drive E:\ --use-existing       # keeps key.dat, old vaults stay 
 usbkey vault attach --vault-dir D:\Private.vault --work-dir C:\Users\me\Private
 ```
 
+`--use-existing` never writes to the stick. `OVERWRITE` (or `--replace`) creates a
+new secret and makes vaults made with the old key unreadable; the old key is saved
+to `%PROGRAMDATA%\usbkey\keystore-backup` on that PC first.
+
 Prefer the hidden prompt. `--passphrase-stdin` reads one line from stdin for scripts;
 `--passphrase` still works but is visible to other users in the process list.

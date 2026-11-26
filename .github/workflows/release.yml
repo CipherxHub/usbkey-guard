@@ -69,6 +69,25 @@ jobs:
             `python -m usbkey_guard ...` form for machines where `usbkey` is not
             on PATH.
 
+            Service fix in 1.0.11: the task could sit at `Status: Ready` forever.
+            `schtasks /create` gives a new task Windows' defaults "start only on
+            AC power" and "stop on battery", so a laptop booting on battery never
+            started the enforcer and unplugging the charger stopped it - pulling
+            the stick then left plaintext readable, even after a reboot.
+
+            The task is now registered from XML with battery restrictions off, no
+            execution time limit, restart-on-failure, StartWhenAvailable, and
+            boot plus logon triggers. Running state is read through the Task
+            Scheduler COM API (the text check was localised), `status` decodes
+            the last result and warns about old battery-blocked tasks, install
+            preflights the task's Python for pywin32/psutil, startup failures go
+            to `logs\enforcer-boot.log`, and a boot-started monitor now waits for
+            the first enrollment instead of exiting.
+
+            To repair an affected PC: `pip install -U usbkey-guard`, then
+            `python -m usbkey_guard` and accept the refresh prompt (or run
+            `python -m usbkey_guard.setup_app install` as Administrator).
+
             Safety: ciphertext is flushed and verified before any plaintext is
             removed; unlock is all-or-nothing and refuses to overwrite a file
             that differs from the vault; lock keeps files edited since unlock;
@@ -84,6 +103,18 @@ jobs:
             and choose USE (or `usbkey enroll --drive E:\ --use-existing`) so
             the existing key.dat is kept, then attach the vault with
             `--work-dir` to pick the restore folder on that machine.
+
+            Second-PC key fix: USE used to fail with "that key file was copied
+            from a different stick" even for the right stick. Windows keeps
+            volume GUIDs per machine, so the same stick reports a different GUID
+            on every PC, and the old check compared those GUIDs (vault keys mixed
+            the GUID in too). key.dat now binds to the stick's on-disk serial,
+            version 1 files are checked with the GUID stored inside the file, and
+            new vault keys use passphrase + stick secret + serial, so one stick
+            opens one vault on every PC. Vaults made before 1.0.11 still unlock.
+            If OVERWRITE was already chosen, the old key is in
+            `C:\ProgramData\usbkey\keystore-backup` on the PC where it was
+            chosen; copy it back as key.dat to recover the old vaults.
 
             Start menu: the all-users entry is now a real `usbkey TUI` shortcut
             (a .bat fallback is kept). The launcher is written with correct CRLF

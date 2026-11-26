@@ -13,6 +13,9 @@ import win32file
 
 from . import config, enforce, keystore, setup_app, vault
 from . import __version__ as VERSION
+from .log import get_log
+
+_log = get_log("tui")
 
 DRIVE_TYPES = {
     win32con.DRIVE_UNKNOWN: "unknown",
@@ -116,7 +119,12 @@ def do_enroll() -> None:
             print("Previous key backed up to:", result["previous_key_backup"])
         print("\nNext: attach your encrypted folder (menu option 7), then unlock it.")
     except Exception as exc:
+        _log.exception("enrollment failed for %s", drive)
         print("FAILED:", exc)
+        if adopt:
+            print("Nothing was written to the stick; its key file is unchanged.")
+        else:
+            print("Nothing was enrolled.")
     pause()
 
 
