@@ -173,10 +173,23 @@ runs the same repair, and `usbkey-setup harden` deliberately reverses it
 
 ## Uninstall
 
+Easiest: run `usbkey-tui` and choose **11) Remove usbkey from this PC**. It lists
+what will be deleted, refuses while a vault or a locked folder is still
+registered (remove that protection first, option 8), asks you to type `REMOVE`,
+then raises the UAC prompt and removes the service, the Start menu entry, the
+Program Files copy, the state folder and the Python package.
+
+From a command line, the same removal:
+
 ```powershell
-usbkey-setup uninstall
-pip uninstall usbkey-guard
+# Administrator PowerShell
+python -m usbkey_guard.setup_app uninstall --purge
+python -m pip uninstall -y usbkey-guard
 ```
 
-Uninstall preserves `C:\ProgramData\usbkey` so encrypted vaults are not lost. Reinstall,
-then use `usbkey vault attach <vault folder>` to register them again.
+`--purge` also deletes `C:\ProgramData\usbkey`. Without it the state folder is
+preserved, which is what you want if vaults still exist: reinstall, then
+`usbkey vault attach <vault folder>` registers them again.
+
+Neither form touches your USB stick (`key.dat` stays, so existing vaults remain
+readable) or any vault folder.

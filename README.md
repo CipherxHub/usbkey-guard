@@ -28,6 +28,9 @@ The TUI walks you through:
 3. setting a passphrase,
 4. unlocking later with the stick + passphrase.
 
+Menu option 11 removes the tool from the PC in one step; it refuses while a
+vault is still registered, so encrypted data can never be stranded.
+
 See `INSTALL.md`, `QUICKSTART.md` and `LIMITATIONS.md`.
 
 ## Safety

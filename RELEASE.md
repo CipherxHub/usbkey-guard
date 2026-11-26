@@ -1,29 +1,29 @@
 # Release build notes
 
-Package: `usbkey-guard` 1.0.7 (pip-installable, Windows only)
+Package: `usbkey-guard` 1.0.8 (pip-installable, Windows only)
 
 ## What is included
 
 - `src/usbkey_guard/` - all runtime modules, no hardcoded machine paths
 - TUI with first-run USB drive selection, encryption, unlock, lock, verify,
   attach-existing-vault (with a restore-folder override), second-PC key adopt,
-  stop-protecting, service control and recovery export
+  stop-protecting, service control, recovery export and complete removal
 - CLI for scripting/recovery
 - `usbkey-setup install|uninstall|status|harden|repair-permissions` - Program
   Files copy, all-users Start menu shortcut, SYSTEM scheduled task (created and
-  started), state-folder permissions
+  started), state-folder permissions, `uninstall --purge` for a full removal
 - `config.py` - all paths overridable by `USBKEY_STATE` / `USBKEY_INSTALL`
 - `README.md`, `INSTALL.md`, `QUICKSTART.md`, `LIMITATIONS.md`, `LICENSE`
-- 81 automated tests including source-level no-destructive guard, crash replay,
+- 92 automated tests including source-level no-destructive guard, crash replay,
   unique vault IDs, path/manifest traversal, all-or-nothing unlock, verified
   unprotect, second-PC key adopt, state-permission repair, service start and
-  interpreter checks, corrupt-state handling, the installed-copy import layout
-  and the Start menu launcher encoding
+  interpreter checks, removal safety, corrupt-state handling, the installed-copy
+  import layout and the Start menu launcher encoding
 
 ## Verified
 
 - `pip install -e .` succeeds
-- `python -m pytest tests -q` -> 81 passed
+- `python -m pytest tests -q` -> 92 passed
 - `python -m usbkey_guard --help` works
 - convert -> verify -> unlock -> lock round trip, including empty folders, a
   modified file that must survive locking, and a vault released back to
@@ -32,6 +32,19 @@ Package: `usbkey-guard` 1.0.7 (pip-installable, Windows only)
 - attach --work-dir restores a vault made on another machine into a new folder
 - manifests written by 1.0.1 (no `kdf` key) still unlock
 - TUI first-run correctly detects a removable drive and offers it for enrollment
+
+## Added in 1.0.8
+
+- TUI option **11) Remove usbkey from this PC**: one place to uninstall without
+  remembering commands. It lists exactly what will be removed, refuses while a
+  vault or a locked folder is still registered (so encrypted data can never be
+  stranded), requires the word `REMOVE`, then raises UAC and deletes the service,
+  the Start menu entry, the Program Files copy, the state folder and the pip
+  package. It never touches the stick or a vault folder.
+- `usbkey-setup uninstall --purge` performs the same full removal from a
+  command line; without `--purge` the state folder is kept as before.
+- The Background service submenu now points at that same removal instead of
+  silently deleting half the install.
 
 ## Fixed in 1.0.7
 

@@ -307,13 +307,65 @@ def do_attach() -> None:
 
 def do_service() -> None:
     heading("BACKGROUND ENFORCER")
-    print("1) Status   2) Install   3) Uninstall")
-    action = {"1": "status", "2": "install", "3": "uninstall"}.get(ask("Choose: "))
+    print("1) Status   2) Install / repair   3) Remove usbkey from this PC")
+    choice = ask("Choose: ")
+    if choice == "3":
+        do_uninstall()
+        return
+    action = {"1": "status", "2": "install"}.get(choice)
     if not action:
         return
-    print({"status": setup_app.status, "install": setup_app.install,
-           "uninstall": setup_app.uninstall}[action]())
+    print({"status": setup_app.status, "install": setup_app.install}[action]())
     pause()
+
+
+def do_uninstall() -> None:
+    heading("REMOVE USBKEY FROM THIS PC")
+    try:
+        vaults = vault.list_vaults()
+        cfg = enforce.load_config()
+    except Exception as exc:
+        print("Cannot read the state folder:", exc)
+        print("Delete", config.STATE_ROOT, "manually, then run this in an")
+        print("Administrator PowerShell:")
+        print("  python -m usbkey_guard.setup_app uninstall --purge")
+        pause()
+        return
+    locked = [r for r in cfg.get("roots", []) if r.get("locked")]
+    if vaults or locked:
+        print("This PC still has protected data:\n")
+        for v in vaults:
+            print("  vault", v["id"], "->", v["work_dir"])
+        for r in locked:
+            print("  locked folder", r["path"])
+        print("\nRemove that protection first (menu option 8), then uninstall.")
+        print("Removing the tool now would leave it encrypted with no way to")
+        print("decrypt it on this machine. Nothing was changed.")
+        pause()
+        return
+    print("This removes from this PC:")
+    print("  - the Start menu shortcut and the Program Files copy")
+    print("  - the background service usbkey-enforcer")
+    print("  - the state folder (registrations, logs)")
+    print("  - the Python package usbkey-guard")
+    print("\nThis does NOT touch:")
+    print("  - your USB stick: key.dat stays, so your vaults stay readable")
+    print("  - any vault folder or ordinary file")
+    print("\nWindows will ask for Administrator permission.")
+    if ask("Type REMOVE to continue (blank cancels): ").upper() != "REMOVE":
+        print("Cancelled. Nothing was changed.")
+        pause()
+        return
+    if not setup_app.elevate_uninstall():
+        print("\nCould not start the Administrator step.")
+        print("Run these in an Administrator PowerShell instead:")
+        print("  python -m usbkey_guard.setup_app uninstall --purge")
+        print("  python -m pip uninstall -y usbkey-guard")
+        pause()
+        return
+    print("\nA separate Administrator window is finishing the removal.")
+    print("You can close this window once it reports success.")
+    raise SystemExit(0)
 
 
 def do_export() -> None:
@@ -351,12 +403,13 @@ def _main() -> int:
         print("  8) Stop protecting a vault (decrypt for good)")
         print("  9) Background service")
         print(" 10) Export recovery bundle")
+        print(" 11) Remove usbkey from this PC")
         print("  0) Exit")
         choice = ask("\nChoose: ")
         actions = {
             "1": show_status, "2": do_enroll, "3": do_encrypt, "4": do_unlock,
             "5": do_lock, "6": do_verify, "7": do_attach, "8": do_remove,
-            "9": do_service, "10": do_export,
+            "9": do_service, "10": do_export, "11": do_uninstall,
         }
         if choice == "0":
             print("Bye.")

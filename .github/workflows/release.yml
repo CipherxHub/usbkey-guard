@@ -87,6 +87,12 @@ jobs:
             running. `usbkey-setup status` also shows the interpreter, whether
             other users can use it, and the service state.
 
+            Removal: TUI option 11 (or `usbkey-setup uninstall --purge`)
+            removes the service, Start menu entry, Program Files copy, state
+            folder and pip package in one step. It refuses while a vault is
+            still registered, so encrypted data can never be stranded, and it
+            never touches the stick or a vault folder.
+
   publish-pypi:
     needs: build
     if: vars.PYPI_PUBLISHED != github.ref_name

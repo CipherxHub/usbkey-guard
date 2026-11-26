@@ -21,6 +21,8 @@ def fake_install(tmp_path, monkeypatch):
     monkeypatch.setattr(sa, "start_menu_dir", lambda: tmp_path / "menu" / "usbkey")
     monkeypatch.setattr(sa.paths, "ensure_state_tree", lambda: None)
     monkeypatch.setattr(sa.acl, "allow_state_writes", lambda root: True)
+    # Never touch the real desktop shortcut while testing removal.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "user"))
 
     calls = []
 
@@ -74,6 +76,7 @@ def test_uninstall_refuses_a_foreign_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(sa.config, "INSTALL_ROOT", foreign)
     monkeypatch.setattr(sa, "is_admin", lambda: True)
     monkeypatch.setattr(sa, "start_menu_dir", lambda: tmp_path / "menu")
+    monkeypatch.setattr(sa, "_remove_desktop_shortcut", lambda: None)
     monkeypatch.setattr(sa.subprocess, "run",
                         lambda *a, **k: types.SimpleNamespace(returncode=0, stdout="", stderr=""))
     with pytest.raises(RuntimeError, match="unexpected folder"):
@@ -160,3 +163,52 @@ def test_interpreter_inside_a_user_profile_is_not_shared(monkeypatch):
 def test_machine_wide_interpreter_is_shared(monkeypatch):
     monkeypatch.setattr(sa.sys, "executable", r"C:\Program Files\Python312\python.exe")
     assert sa.interpreter_is_shared() is True
+
+
+def test_uninstall_keeps_state_by_default(fake_install, tmp_path, monkeypatch):
+    state = tmp_path / "ProgramData" / "usbkey"
+    state.mkdir(parents=True)
+    (state / "vaults.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sa.config, "STATE_ROOT", state)
+    assert sa.uninstall() == 0
+    assert (state / "vaults.json").is_file(), "a plain uninstall must keep the state"
+
+
+def test_uninstall_purge_removes_the_state_folder(fake_install, tmp_path, monkeypatch):
+    state = tmp_path / "ProgramData" / "usbkey"
+    state.mkdir(parents=True)
+    (state / "vaults.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sa.config, "STATE_ROOT", state)
+    assert sa.uninstall(purge=True) == 0
+    assert not state.exists()
+
+
+def test_purge_refuses_a_shallow_folder():
+    assert sa._state_is_purgeable(Path("C:\\")) is False
+    assert sa._state_is_purgeable(Path("C:\\Windows")) is False
+    assert sa._state_is_purgeable(Path("C:\\ProgramData\\usbkey")) is True
+
+
+def test_elevate_uninstall_writes_a_helper_and_reports_a_refusal(tmp_path, monkeypatch):
+    class Shell:
+        def ShellExecuteW(self, *args):
+            return 5  # <= 32 means the shell refused
+
+    monkeypatch.setattr(sa.config, "INSTALL_ROOT", tmp_path / "Program Files" / "usbkey")
+    monkeypatch.setattr(sa.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sa.ctypes, "windll", types.SimpleNamespace(shell32=Shell()))
+    assert sa.elevate_uninstall() is False
+    helper = (tmp_path / "usbkey-uninstall.py").read_text(encoding="utf-8")
+    assert "uninstall" in helper and "--purge" in helper
+    assert "pip" in helper, "the package must be removed too"
+
+
+def test_elevate_uninstall_reports_success(tmp_path, monkeypatch):
+    class Shell:
+        def ShellExecuteW(self, *args):
+            return 42
+
+    monkeypatch.setattr(sa.config, "INSTALL_ROOT", tmp_path / "Program Files" / "usbkey")
+    monkeypatch.setattr(sa.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sa.ctypes, "windll", types.SimpleNamespace(shell32=Shell()))
+    assert sa.elevate_uninstall() is True

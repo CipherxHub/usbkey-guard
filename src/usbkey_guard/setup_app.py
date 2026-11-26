@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -29,6 +30,30 @@ import sys
 sys.path.insert(0, {install!r})
 from usbkey_guard.tui import main
 sys.exit(main())
+"""
+
+_UNINSTALL_HELPER = """\
+import subprocess
+import sys
+
+sys.path.insert(0, {install!r})
+from usbkey_guard.setup_app import main
+
+rc = main(["uninstall", "--purge"])
+
+print()
+print("Removing the Python package usbkey-guard...")
+subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "usbkey-guard"])
+
+try:
+    from pathlib import Path
+    Path(__file__).unlink()
+except OSError:
+    pass
+
+print()
+input("Press Enter to close this window... ")
+sys.exit(rc)
 """
 
 
@@ -240,22 +265,121 @@ def install() -> int:
     return _start_service()
 
 
-def uninstall() -> int:
+def _state_is_purgeable(path: Path) -> bool:
+    """Only a nested folder can be the state root; never a drive or a top folder."""
+    try:
+        resolved = Path(path).resolve()
+    except OSError:
+        return False
+    return len(resolved.parts) >= 3
+
+
+def _purge_state() -> int:
+    root = Path(config.STATE_ROOT)
+    if not root.exists():
+        print("State folder already gone:", root)
+        return 0
+    if not _state_is_purgeable(root):
+        print("Refusing to delete an unexpectedly shallow state folder:", root)
+        return 1
+    try:
+        shutil.rmtree(root)
+    except OSError as exc:
+        print("WARNING: could not remove the state folder:", exc)
+        print("Delete it manually:", root)
+        return 1
+    print("State folder removed:", root)
+    return 0
+
+
+def _stop_enforcer_processes() -> None:
+    """A deleted task can leave its pythonw behind; stop that one only."""
+    script = str(Path(config.INSTALL_ROOT) / ENFORCER_BOOTSTRAP).lower()
+    try:
+        import psutil
+    except ImportError:
+        return
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            cmd = " ".join((proc.info or {}).get("cmdline") or []).lower()
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            continue
+        if script not in cmd:
+            continue
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            try:
+                proc.kill()
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                pass
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            continue
+
+
+def _remove_desktop_shortcut() -> None:
+    desktop = Path(os.environ.get("USERPROFILE") or Path.home()) / "Desktop"
+    link = desktop / "usbkey TUI.lnk"
+    if not link.is_file():
+        return
+    try:
+        link.unlink()
+        print("Desktop shortcut removed.")
+    except OSError as exc:
+        print("WARNING: could not remove the desktop shortcut:", exc)
+
+
+def elevate_uninstall() -> bool:
+    """Ask Windows for elevation and finish the removal in its own console.
+
+    The TUI runs unelevated; deleting the SYSTEM task and Program Files needs an
+    administrator. UAC keeps the same user, so the helper can also uninstall the
+    pip package from that user's site-packages.
+    """
+    helper = Path(tempfile.gettempdir()) / "usbkey-uninstall.py"
+    try:
+        helper.write_text(
+            _UNINSTALL_HELPER.format(install=str(config.INSTALL_ROOT)),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        print("could not write the helper script:", exc)
+        return False
+    try:
+        rc = ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", str(python_console()), f'"{helper}"', None, 1)
+    except Exception as exc:
+        print("could not start the elevated step:", exc)
+        return False
+    if rc <= 32:
+        print("Windows refused to elevate (code", rc, ").")
+        return False
+    return True
+
+
+def uninstall(purge: bool = False) -> int:
     if not is_admin():
         print("ERROR: run this as Administrator.")
         return 1
+    subprocess.run(["schtasks", "/end", "/tn", config.TASK_NAME],
+                   capture_output=True, text=True)
     subprocess.run(["schtasks", "/delete", "/tn", config.TASK_NAME, "/f"],
                    capture_output=True, text=True)
     print("Scheduled task removed.")
+    _stop_enforcer_processes()
     menu = start_menu_dir()
     if menu.exists():
         _assert_own_install_root(menu)
         shutil.rmtree(menu)
         print("Start menu entry removed.")
+    _remove_desktop_shortcut()
     if config.INSTALL_ROOT.exists():
         _assert_own_install_root(config.INSTALL_ROOT)
         shutil.rmtree(config.INSTALL_ROOT)
         print("Program Files copy removed.")
+    if purge:
+        return _purge_state()
     print("State in", config.STATE_ROOT, "was preserved (encrypted vaults stay safe).")
     return 0
 
@@ -298,13 +422,17 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="usbkey-setup")
     p.add_argument("action", choices=["install", "uninstall", "status", "harden",
                                       "repair-permissions"])
+    p.add_argument("--purge", action="store_true",
+                   help="with uninstall: also delete the state folder")
     args = p.parse_args(argv)
     if args.action == "harden":
         if not is_admin():
             print("ERROR: run this as Administrator.")
             return 1
         return 0 if harden_state() else 1
-    return {"install": install, "uninstall": uninstall, "status": status,
+    if args.action == "uninstall":
+        return uninstall(purge=args.purge)
+    return {"install": install, "status": status,
             "repair-permissions": repair_permissions}[args.action]()
 
 
