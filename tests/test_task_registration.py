@@ -3,6 +3,8 @@ import types
 from pathlib import Path
 from xml.etree import ElementTree
 
+import pytest
+
 from usbkey_guard import cli
 from usbkey_guard import setup_app as sa
 
@@ -130,6 +132,46 @@ def test_diagnosis_shows_the_boot_log(tmp_path, monkeypatch, capsys):
     assert "enforcer-boot.log" in out
 
 
+def test_interpreter_probe_imports_what_the_enforcer_needs(fake_install, monkeypatch):
+    """A Python without `cryptography` passed the old probe and died at startup."""
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["code"] = argv[-1]
+        return types.SimpleNamespace(returncode=0, stdout="OK\n", stderr="")
+
+    monkeypatch.setattr(sa, "python_console", lambda: Path("python.exe"))
+    monkeypatch.setattr(sa.subprocess, "run", fake_run)
+    assert sa.interpreter_problem() == ""
+    assert "cryptography" in seen["code"]
+    assert "win32com" in seen["code"]
+    assert "usbkey_guard.cli" in seen["code"]
+
+
+def test_missing_module_reads_the_boot_log_line():
+    assert sa._missing_module(
+        "ModuleNotFoundError: No module named 'cryptography'") == "cryptography"
+    assert sa._missing_module("plain traceback") == ""
+
+
+def test_diagnosis_names_the_missing_module_and_the_fix(tmp_path, monkeypatch,
+                                                       capsys):
+    monkeypatch.setattr(sa.config, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(sa, "interpreter_is_shared", lambda: True)
+    log = tmp_path / "logs" / "enforcer-boot.log"
+    log.parent.mkdir(parents=True)
+    log.write_text("ModuleNotFoundError: No module named 'cryptography'",
+                   encoding="utf-8")
+    sa.print_service_diagnosis({
+        "exists": True, "state": 3, "last_result": 1,
+        "last_run": None, "xml": _task_xml(),
+    })
+    out = capsys.readouterr().out
+    assert "cannot import 'cryptography'" in out
+    assert "pywin32 psutil cryptography" in out
+    assert "C:\\Python312\\python.exe" in out, "the fix must name the task's Python"
+
+
 def test_status_is_quiet_when_the_service_runs(monkeypatch, capsys):
     monkeypatch.setattr(sa, "task_info", lambda: {
         "exists": True, "state": sa.TASK_STATE_RUNNING, "last_result": 0x41301,
@@ -225,9 +267,34 @@ def test_explain_result_names_the_common_codes():
     assert "has not run yet" in sa._explain_result(0x41303)
     assert "file not found" in sa._explain_result(0x80070002)
     assert "0x00000005" in sa._explain_result(5)
+    assert "skipped" in sa._explain_result(0x800710E0)
 
 
-def test_interpreter_problem_reports_a_broken_import(monkeypatch):
+@pytest.fixture
+def fake_install(tmp_path, monkeypatch):
+    """A minimal install folder the source scan can read."""
+    root = tmp_path / "usbkey"
+    pkg = root / "usbkey_guard"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "cli.py").write_text(
+        "import cryptography\nimport win32event\nfrom win32com import client\n",
+        encoding="utf-8")
+    monkeypatch.setattr(sa.config, "INSTALL_ROOT", root)
+    return root
+
+
+def test_required_modules_finds_every_third_party_import(fake_install):
+    assert sa.required_modules() == ["cryptography", "win32com", "win32event"]
+
+
+def test_required_modules_never_lists_the_stdlib_or_the_package():
+    names = sa.required_modules()
+    assert "os" not in names and "json" not in names
+    assert "usbkey_guard" not in names
+
+
+def test_interpreter_problem_reports_a_broken_import(fake_install, monkeypatch):
     monkeypatch.setattr(sa, "python_console",
                         lambda: Path(r"C:\Python312\python.exe"))
 
@@ -242,14 +309,27 @@ def test_interpreter_problem_reports_a_broken_import(monkeypatch):
     assert "C:\\Python312\\python.exe" in message
 
 
-def test_interpreter_problem_is_silent_when_imports_work(monkeypatch):
+def test_interpreter_problem_reports_every_missing_module(fake_install, monkeypatch):
     monkeypatch.setattr(sa, "python_console", lambda: Path("python.exe"))
     monkeypatch.setattr(sa.subprocess, "run", lambda argv, **kw: types.SimpleNamespace(
-        returncode=0, stdout="1.0.11\n", stderr=""))
+        returncode=3,
+        stdout="MISSING: cryptography (ModuleNotFoundError: No module named "
+               "'cryptography'); win32event (ModuleNotFoundError: No module "
+               "named 'win32event')\n",
+        stderr=""))
+    message = sa.interpreter_problem()
+    assert "cryptography" in message
+    assert "win32event" in message
+
+
+def test_interpreter_problem_is_silent_when_imports_work(fake_install, monkeypatch):
+    monkeypatch.setattr(sa, "python_console", lambda: Path("python.exe"))
+    monkeypatch.setattr(sa.subprocess, "run", lambda argv, **kw: types.SimpleNamespace(
+        returncode=0, stdout="OK\n", stderr=""))
     assert sa.interpreter_problem() == ""
 
 
-def test_interpreter_problem_handles_a_missing_python(monkeypatch):
+def test_interpreter_problem_handles_a_missing_python(fake_install, monkeypatch):
     monkeypatch.setattr(sa, "python_console", lambda: Path("gone.exe"))
 
     def boom(argv, **kwargs):
@@ -257,6 +337,11 @@ def test_interpreter_problem_handles_a_missing_python(monkeypatch):
 
     monkeypatch.setattr(sa.subprocess, "run", boom)
     assert "could not run" in sa.interpreter_problem()
+
+
+def test_interpreter_problem_reports_a_missing_install_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(sa.config, "INSTALL_ROOT", tmp_path / "nothing")
+    assert "run install again" in sa.interpreter_problem()
 
 
 def test_await_identity_waits_for_enrollment():

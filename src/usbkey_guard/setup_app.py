@@ -4,6 +4,7 @@ The scheduled task and the Start menu launcher both run bootstrap scripts that
 live in the install folder, so the installed copy is what actually executes
 even when pip's site-packages is per-user.
 """
+import ast
 import ctypes
 import os
 import shutil
@@ -217,6 +218,7 @@ _RESULT_TEXT = {
     0x41304: "no more runs scheduled",
     0x41306: "terminated",
     0x41307: "terminated: time limit exceeded",
+    0x800710E0: "start skipped: already running",
     0x80070002: "file not found (check the Python path)",
     0x80070003: "path not found (check the install folder)",
     0x80070005: "access denied",
@@ -290,13 +292,65 @@ def _settings_warning(xml_text: str) -> str:
     return ""
 
 
+def required_modules() -> list[str]:
+    """Every non-stdlib module the installed package imports, found by scanning.
+
+    A hand-written list is how `cryptography` was missed: the package imports it
+    in `cli.py`, which nothing imported during the old probe. This walks the
+    source instead, so a dependency added in a later version is checked without
+    anyone remembering to update a list. Lazy imports inside functions are found
+    too, because the scan is static.
+    """
+    root = Path(config.INSTALL_ROOT) / "usbkey_guard"
+    names: set[str] = set()
+    for path in root.rglob("*.py"):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(alias.name for alias in node.names)
+            elif (isinstance(node, ast.ImportFrom) and node.level == 0
+                  and node.module):
+                names.add(node.module)
+    stdlib = set(sys.stdlib_module_names)
+    return sorted(
+        name for name in names
+        if name.split(".")[0] not in stdlib and name.split(".")[0] != "usbkey_guard"
+        and not name.startswith("_")
+    )
+
+
+_PROBE = """\
+import importlib
+import sys
+
+sys.path.insert(0, {root!r})
+bad = []
+for name in {modules!r}:
+    try:
+        importlib.import_module(name)
+    except Exception as exc:
+        bad.append("{{}} ({{}}: {{}})".format(name, type(exc).__name__, exc))
+try:
+    import usbkey_guard.cli  # the module the enforcer bootstrap imports
+except Exception as exc:
+    bad.append("usbkey_guard.cli ({{}}: {{}})".format(type(exc).__name__, exc))
+if bad:
+    print("MISSING: " + "; ".join(bad))
+    sys.exit(3)
+print("OK")
+"""
+
+
 def interpreter_problem() -> str:
-    """Empty when the task's Python can import the installed package."""
-    code = (
-        "import sys; sys.path.insert(0, {root!r}); "
-        "import usbkey_guard, win32event, psutil; "
-        "print(usbkey_guard.__version__)"
-    ).format(root=str(config.INSTALL_ROOT))
+    """Empty when the task's Python can import everything the enforcer imports."""
+    if not (Path(config.INSTALL_ROOT) / "usbkey_guard").is_dir():
+        return (f"the install folder {config.INSTALL_ROOT} is missing or "
+                "incomplete - run install again")
+    modules = required_modules()
+    code = _PROBE.format(root=str(config.INSTALL_ROOT), modules=modules)
     try:
         result = subprocess.run([str(python_console()), "-c", code],
                                 capture_output=True, text=True, timeout=60)
@@ -304,7 +358,12 @@ def interpreter_problem() -> str:
         return f"could not run {python_console()}: {exc}"
     if result.returncode == 0:
         return ""
-    lines = (result.stderr or result.stdout).strip().splitlines()
+    output = (result.stdout or "") + "\n" + (result.stderr or "")
+    for line in output.splitlines():
+        if line.startswith("MISSING:"):
+            return (f"{python_console()} is missing modules: "
+                    + line[len("MISSING:"):].strip())
+    lines = [line for line in output.strip().splitlines() if line.strip()]
     detail = lines[-1] if lines else f"exit code {result.returncode}"
     return (f"{python_console()} cannot import the installed package: {detail}")
 
@@ -366,6 +425,13 @@ def _action_problems(command: str, arguments: str) -> list[str]:
     return problems
 
 
+def _missing_module(text: str) -> str:
+    """The module named in `ModuleNotFoundError: No module named 'x'`."""
+    import re
+    match = re.search(r"No module named '([^']+)'", text or "")
+    return match.group(1) if match else ""
+
+
 def print_service_diagnosis(info: dict | None = None) -> None:
     """Explain why the enforcer is not running, from the evidence on disk."""
     info = info if info is not None else task_info()
@@ -383,10 +449,22 @@ def print_service_diagnosis(info: dict | None = None) -> None:
         print("Last startup failure (" + str(boot_log_path()) + "):")
         for line in tail.splitlines():
             print("  " + line)
+        missing = _missing_module(tail)
+        if missing:
+            target = Path(command.strip().strip('"')).with_name("python.exe") \
+                if command else python_console()
+            print("  PROBLEM: that Python cannot import '" + missing + "'.")
+            print('  Fix: "' + str(target) + '" -m pip install '
+                  "pywin32 psutil cryptography")
+            print("  Then run install again as Administrator.")
     elif code == 0x41306:
         print("The service process was terminated (Task Manager, 'End task', or "
               "antivirus). The five-minute watchdog starts it again by itself; "
               "to do it now: schtasks /run /tn usbkey-enforcer")
+    elif code == 0x800710E0:
+        print("Task Scheduler refused the last start. If another usbkey monitor "
+              "is running, stop it (Task Manager) and run install again; "
+              "otherwise a policy is blocking the task.")
     elif code in (0x41303, 0x41300):
         print("The task has not started yet. Run install again as "
               "Administrator, or start it with: schtasks /run /tn usbkey-enforcer")
@@ -620,9 +698,10 @@ def install() -> int:
     if problem:
         print()
         print("WARNING:", problem)
-        print("The service would start and exit immediately. Install pywin32 and")
-        print("psutil for that Python (or reinstall usbkey-guard with it), then")
-        print("run install again.")
+        print("The service would start and exit immediately.")
+        print('Fix: "' + str(python_console()) + '" -m pip install '
+              "pywin32 psutil cryptography")
+        print("Then run install again.")
     rc = _create_task()
     if rc != 0:
         return rc

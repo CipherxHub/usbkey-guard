@@ -1,6 +1,6 @@
 # Release build notes
 
-Package: `usbkey-guard` 1.0.13 (pip-installable, Windows only)
+Package: `usbkey-guard` 1.0.14 (pip-installable, Windows only)
 
 ## What is included
 
@@ -16,21 +16,22 @@ Package: `usbkey-guard` 1.0.13 (pip-installable, Windows only)
   started), state-folder permissions, `uninstall --purge` for a full removal
 - `config.py` - all paths overridable by `USBKEY_STATE` / `USBKEY_INSTALL`
 - `README.md`, `INSTALL.md`, `QUICKSTART.md`, `LIMITATIONS.md`, `LICENSE`
-- 151 automated tests including source-level no-destructive guard, crash replay,
+- 158 automated tests including source-level no-destructive guard, crash replay,
   unique vault IDs, path/manifest traversal, all-or-nothing unlock, verified
   unprotect, second-PC key adopt (including a different volume GUID and a legacy
   key file), cross-machine vault keys, state-permission repair, service start and
-  interpreter checks, task XML registration (battery, triggers, watchdog,
-  restart, escaping), service diagnosis (missing interpreter, Store alias,
-  missing bootstrap, boot-log tail), locale-proof task state, the install
-  preflight, the enrollment wait, removal safety, the first-run service offer,
-  the no-argument menu entry point, corrupt-state handling, the installed-copy
-  import layout and the Start menu launcher encoding
+  a source-wide dependency scan (every non-stdlib import in the package), task XML
+  registration (battery, triggers, watchdog, restart, escaping), service diagnosis
+  (missing interpreter, Store alias, missing bootstrap, boot-log tail, missing
+  module), locale-proof task state, the install preflight, the enrollment wait,
+  removal safety, the first-run service offer, the no-argument menu entry point,
+  corrupt-state handling, the installed-copy import layout and the Start menu
+  launcher encoding
 
 ## Verified
 
 - `pip install -e .` succeeds
-- `python -m pytest tests -q` -> 151 passed here (the mutual-exclusion
+- `python -m pytest tests -q` -> 157 passed, 1 skipped here (the mutual-exclusion
   test skips itself on a PC where the real enforcer is already running)
 - `python -m usbkey_guard --help` works
 - convert -> verify -> unlock -> lock round trip, including empty folders, a
@@ -40,6 +41,29 @@ Package: `usbkey-guard` 1.0.13 (pip-installable, Windows only)
 - attach --work-dir restores a vault made on another machine into a new folder
 - manifests written by 1.0.1 (no `kdf` key) still unlock
 - TUI first-run correctly detects a removable drive and offers it for enrollment
+
+## Fixed in 1.0.14
+
+The install preflight still missed the failure that stopped a laptop: it probed
+`usbkey_guard`, `win32event` and `psutil` by name, so a Python without
+`cryptography` passed the check and the enforcer then died at startup with
+`ModuleNotFoundError: No module named 'cryptography'`.
+
+- The preflight now scans the installed package's source and imports every
+  non-stdlib module it references (13 today: `cryptography.exceptions`,
+  `cryptography.hazmat.primitives.ciphers.aead`, `psutil`, `pywintypes`,
+  `win32api`, `win32com.client`, `win32con`, `win32event`, `win32file`,
+  `win32gui`, `win32process`, `win32security`, `winerror`), so a dependency
+  added in a later version is checked without anyone updating a list, and lazy
+  imports inside functions are covered too.
+- One run reports every missing module at once instead of only the first
+  traceback.
+- `status` reads `No module named 'x'` from the boot log and prints the repair
+  command for the task's own interpreter, e.g.
+  `"C:\Python312\python.exe" -m pip install pywin32 psutil cryptography`.
+- `install` no longer says "install again" without saying what to install.
+- A watchdog tick that finds the service already running is decoded as
+  "start skipped: already running" instead of an unknown `0x800710E0`.
 
 ## Fixed in 1.0.13
 

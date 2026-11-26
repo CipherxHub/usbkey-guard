@@ -105,6 +105,15 @@ jobs:
             antivirus or by an update used to stay down until the next boot. With
             IgnoreNew the watchdog never duplicates a healthy instance.
 
+            Dependency check in 1.0.14: the install preflight used to probe three
+            module names, so a Python without `cryptography` passed and the
+            enforcer died at startup. It now scans the installed package and
+            imports every non-stdlib module it references (13 today, including
+            cryptography, win32com.client and pywintypes), reports all missing
+            ones at once, and `status` prints the exact
+            `-m pip install pywin32 psutil cryptography` command for the task's
+            own interpreter.
+
             Safety: ciphertext is flushed and verified before any plaintext is
             removed; unlock is all-or-nothing and refuses to overwrite a file
             that differs from the vault; lock keeps files edited since unlock;

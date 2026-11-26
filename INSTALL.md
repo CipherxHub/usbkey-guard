@@ -239,14 +239,21 @@ The three causes it names, in order of how often they happen:
 2. **The task runs the Microsoft Store alias** (`...\WindowsApps\pythonw.exe`).
    A SYSTEM task cannot execute Store aliases. Install Python from python.org
    and run install again.
-3. **Python cannot import `pywin32` / `psutil`.** `status` prints
-   `WARNING: ... cannot import the installed package`. That happens when the
-   dependencies were installed only for your user (or into a virtualenv).
-   Install them for the same interpreter the task uses:
+3. **Python cannot import a dependency.** `status` prints
+   `WARNING: ... is missing modules: cryptography (ModuleNotFoundError: ...)`,
+   or the boot log shows it. That happens when the package or its dependencies
+   were installed for a different interpreter (a user-only Python, or a
+   virtualenv). From 1.0.14 the check imports every non-stdlib module the
+   installed package references, so nothing is skipped. `status` prints the fix
+   line with the task's own interpreter:
    ```powershell
    & "C:\Python312\python.exe" -m pip install pywin32 psutil cryptography
    ```
-   then `python -m usbkey_guard.setup_app install` again.
+   then `python -m usbkey_guard.setup_app install` again. Installing the package
+   itself with that interpreter also works:
+   ```powershell
+   & "C:\Python312\python.exe" -m pip install -U usbkey-guard
+   ```
 
 If none of those appear, the block prints the last lines of
 `C:\ProgramData\usbkey\logs\enforcer-boot.log`, which is the enforcer's own
