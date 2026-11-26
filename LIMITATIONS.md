@@ -16,6 +16,15 @@
 - Deleting or formatting the encrypted vault (that destroys data, but reveals nothing)
 - Hardware-level attacks, cold-boot attacks, or a compromised operating system
 
+## Removing protection
+
+`usbkey vault remove --vault-id <id> --yes` (TUI: *Stop protecting a vault*) decrypts
+every file for good and then deletes the encrypted copy. It needs the stick and the
+passphrase, and it refuses to run if a file was edited after unlock, so it can never
+replace your newer work. Add `--keep-ciphertext` to keep the encrypted folder as a
+backup; it can be re-attached later. Deleting the vault folder yourself has the same
+effect on the ciphertext, but loses the ability to recover it.
+
 ## Why not just permissions?
 
 NTFS permissions can always be overridden by an administrator taking ownership. Encryption

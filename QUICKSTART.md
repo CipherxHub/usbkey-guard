@@ -18,15 +18,23 @@
 ```
 usbkey status              # key present? vaults locked?
 usbkey vault verify        # integrity check
+usbkey vault remove --vault-id <id> --yes   # decrypt for good, stop protecting
 usbkey export-recovery D:\Recovery   # bundle to keep OFF this machine
 ```
 
+To stop protecting something you no longer need, use **8) Stop protecting a vault**
+(or `usbkey vault remove`). It decrypts the files, deletes the encrypted copy, and
+leaves ordinary files you can delete normally. ACL-protected folders come out with
+`usbkey protect remove <path>` after unlocking them.
+
 ## If something goes wrong
 
-- Wrong passphrase → `InvalidTag`, nothing is written.
+- Wrong passphrase → refused with a clear message, nothing is written.
 - Edited file at lock time → lock refuses to delete it; your changes are preserved.
 - A file in the work folder that differs from the vault → unlock refuses to overwrite it
   and writes nothing at all. Move it aside, then unlock again (or `--force`).
+- Want to stop protecting a vault → **8) Stop protecting a vault**, or
+  `usbkey vault remove --vault-id <id> --yes`. Files become ordinary files.
 - Reinstalled machine → `usbkey vault attach D:\Private.vault`, then unlock.
 - Lost stick → there is no recovery. Keep a second copy of `key.dat` on a spare stick
   and keep your passphrase somewhere safe.

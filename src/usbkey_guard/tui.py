@@ -238,6 +238,39 @@ def do_lock() -> None:
     pause()
 
 
+def do_remove() -> None:
+    heading("STOP PROTECTING A VAULT")
+    v = choose_vault()
+    if not v:
+        pause()
+        return
+    print("\nThis decrypts the vault for good. The files stay in")
+    print("  " + v["work_dir"])
+    print("as ordinary unencrypted files, and the encrypted copy is deleted.")
+    print("Anything you no longer need can then be deleted normally.")
+    if ask("Type DELETE to continue (blank cancels): ").upper() != "DELETE":
+        print("Cancelled. Nothing was changed.")
+        pause()
+        return
+    keep = ask("Keep the encrypted copy on disk as a backup? [y/N]: ").lower() == "y"
+    pw = getpass.getpass("Passphrase (hidden): ")
+    try:
+        r = vault.remove(v["id"], passphrase=pw, yes=True, keep_ciphertext=keep)
+        print("\nDONE.", r["files"], "file(s) are now ordinary files.")
+        print("Encrypted copy:", "kept at " + r["vault_dir"] if keep else "deleted")
+        for note in r["leftovers"]:
+            print("left alone:", note)
+    except Exception as exc:
+        text = str(exc)
+        print("NOT CHANGED:", text)
+        if "refusing to overwrite" in text:
+            print("You edited these files after unlocking. Move the edited copies")
+            print("aside, unlock again, then stop protection.")
+        elif "InvalidTag" in type(exc).__name__ or "InvalidTag" in text:
+            print("Wrong passphrase, wrong USB stick, or damaged ciphertext.")
+    pause()
+
+
 def do_verify() -> None:
     heading("VERIFY")
     problems = enforce.verify() + vault.verify()
@@ -302,14 +335,15 @@ def _main() -> int:
         print("  5) Lock (wipe plaintext)")
         print("  6) Verify integrity")
         print("  7) Attach existing vault")
-        print("  8) Background service")
-        print("  9) Export recovery bundle")
+        print("  8) Stop protecting a vault (decrypt for good)")
+        print("  9) Background service")
+        print(" 10) Export recovery bundle")
         print("  0) Exit")
         choice = ask("\nChoose: ")
         actions = {
             "1": show_status, "2": do_enroll, "3": do_encrypt, "4": do_unlock,
-            "5": do_lock, "6": do_verify, "7": do_attach, "8": do_service,
-            "9": do_export,
+            "5": do_lock, "6": do_verify, "7": do_attach, "8": do_remove,
+            "9": do_service, "10": do_export,
         }
         if choice == "0":
             print("Bye.")

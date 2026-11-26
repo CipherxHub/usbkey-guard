@@ -5,6 +5,8 @@ import sys
 import time
 from pathlib import Path
 
+from cryptography.exceptions import InvalidTag
+
 from . import audit as audit_mod
 from . import config, enforce, keystore, paths, procs, setup_app, snapshot, vault
 from .errors import UsbKeyError
@@ -251,6 +253,26 @@ def cmd_vault(args) -> int:
                                  force=args.force):
             print("restored:", line)
         return 0
+    if args.action == "remove":
+        if not args.vault_id:
+            print("--vault-id is required")
+            return 1
+        if not args.yes:
+            print("This decrypts the vault for good. Pass --yes to confirm;")
+            print("add --keep-ciphertext to keep the encrypted copy on disk.")
+            return 1
+        result = vault.remove(args.vault_id, passphrase=_passphrase(args), yes=True,
+                              keep_ciphertext=args.keep_ciphertext)
+        print(f"Unprotected vault {result['id']}: {result['files']} file(s) "
+              f"are now ordinary files in {result['work_dir']}")
+        if result["deleted_ciphertext"]:
+            print("Deleted encrypted copy:", result["vault_dir"])
+        else:
+            print("Kept encrypted copy:", result["vault_dir"])
+        for note in result["leftovers"]:
+            print("left alone:", note)
+        print("Nothing is protected now - delete or move the files as usual.")
+        return 0
     return 1
 
 
@@ -379,7 +401,9 @@ def build_parser() -> argparse.ArgumentParser:
     ex.set_defaults(func=cmd_export_recovery)
 
     va = sub.add_parser("vault")
-    va.add_argument("action", choices=["convert", "attach", "unlock", "lock", "status", "verify"])
+    va.add_argument("action",
+                    choices=["convert", "attach", "unlock", "lock", "status",
+                             "verify", "remove"])
     va.add_argument("--work-dir")
     va.add_argument("--vault-dir")
     va.add_argument("--vault-id")
@@ -388,6 +412,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="read the passphrase from stdin (safer than --passphrase)")
     va.add_argument("--force", action="store_true",
                     help="unlock: overwrite files that differ from the vault")
+    va.add_argument("--keep-ciphertext", action="store_true",
+                    help="remove: keep the encrypted folder (re-attach it later)")
     va.add_argument("--yes", action="store_true")
     va.set_defaults(func=cmd_vault)
 
@@ -413,6 +439,11 @@ def main(argv=None) -> int:
     except UsbKeyError as exc:
         print(f"ERROR({exc.code}): {exc}")
         return exc.code
+    except InvalidTag:
+        # AES-GCM authenticates before decrypting: nothing was written.
+        print("ERROR: wrong passphrase, wrong USB stick, or damaged ciphertext. "
+              "Nothing was written.")
+        return 1
     except Exception as exc:
         _log.exception("unhandled")
         print(f"ERROR: {type(exc).__name__}: {exc}")

@@ -46,6 +46,8 @@ Guard rails that refuse to run instead of guessing:
   or at a system path is rejected before a single byte is written.
 - Unlock verifies every ciphertext first and refuses to overwrite files that differ from
   the vault (`--force` to override). Lock keeps changed files and reports them.
+- Unprotecting a vault decrypts and verifies every file before the encrypted copy is
+  deleted; it refuses if any file was edited after unlock.
 - A corrupt state file is copied aside and reported; it is never silently reset.
 
 This is protection **at rest**. It is not a defence against keyloggers, a copied already-
@@ -59,6 +61,7 @@ usbkey vault convert --work-dir D:\Private --vault-dir D:\Private.vault --yes
 usbkey vault unlock --vault-id <id>            # passphrase is prompted, not echoed
 usbkey vault lock
 usbkey vault verify
+usbkey vault remove --vault-id <id> --yes      # decrypt for good, stop protecting
 usbkey export-recovery D:\Recovery
 ```
 

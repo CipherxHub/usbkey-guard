@@ -12,6 +12,10 @@ never overwritten without an explicit force.
 
 Locking likewise refuses to delete any plaintext file whose hash has changed
 since unlock, so edited work is never destroyed.
+
+Removing protection (release) decrypts the vault for good: it verifies every
+file onto disk first and only then drops the registration and the ciphertext,
+so it can never leave the encrypted copy as the only copy of your data.
 """
 import getpass
 import hashlib
@@ -561,6 +565,76 @@ def attach(vault_dir: str) -> dict[str, Any]:
     })
     _write_config(cfg)
     return m
+
+
+def _delete_ciphertext(v: dict[str, Any], m: dict[str, Any]) -> list[str]:
+    """Delete only the files this tool wrote, never anything else in the folder."""
+    vd = Path(v["vault_dir"])
+    leftovers: list[str] = []
+    targets = [vd / "manifest.json"]
+    targets += [_enc_path(v, e["enc"]) for e in m["files"]]
+    for path in targets:
+        try:
+            if _is_reparse(path):
+                leftovers.append(str(path) + " (link, left alone)")
+            elif path.is_file():
+                os.remove(path)
+        except OSError as exc:
+            leftovers.append(f"{path}: {exc}")
+    # Only remove folders that are empty: anything the user put there stays.
+    for folder in (vd / "data", vd):
+        try:
+            if folder.is_dir() and not _is_reparse(folder) and not any(folder.iterdir()):
+                os.rmdir(folder)
+        except OSError:
+            pass
+    return leftovers
+
+
+def remove(vault_id: str, passphrase: str | None = None, yes: bool = False,
+           keep_ciphertext: bool = False) -> dict[str, Any]:
+    """Stop protecting a vault: decrypt it for good and unregister it.
+
+    Needs the USB key and the passphrase. Every file is restored and verified
+    on disk before the encrypted copy is deleted, so this can never destroy the
+    only copy of the data. A file that was edited after unlock is not
+    overwritten: removal refuses instead, and nothing is changed.
+    """
+    cfg, v = _vault_config(vault_id)
+    m = _manifest(v)
+    if not yes:
+        raise PermissionError(
+            "pass --yes to confirm: the files become ordinary unencrypted files"
+            + ("" if keep_ciphertext else " and the encrypted copy is deleted")
+        )
+    restored = unlock(vault_id, passphrase=passphrase)
+    # Plaintext is complete and verified now; drop the registration first so a
+    # crash cannot leave a vault pointing at half-deleted ciphertext.
+    cfg = _read_config()
+    cfg["vaults"] = [x for x in cfg["vaults"] if x.get("id") != m["id"]]
+    _write_config(cfg)
+    leftovers: list[str] = []
+    if not keep_ciphertext:
+        leftovers = _delete_ciphertext(v, m)
+        try:
+            backup_dir = BACKUP / m["id"]
+            if backup_dir.is_dir():
+                for f in backup_dir.iterdir():
+                    if f.is_file():
+                        f.unlink()
+                backup_dir.rmdir()
+        except OSError:
+            pass
+    _log.info("removed vault %s (%d files, ciphertext kept=%s)",
+              vault_id, len(restored), keep_ciphertext)
+    return {
+        "id": m["id"],
+        "work_dir": m["work_dir"],
+        "vault_dir": v["vault_dir"],
+        "files": len(restored),
+        "deleted_ciphertext": not keep_ciphertext,
+        "leftovers": leftovers,
+    }
 
 
 def list_vaults() -> list[dict[str, Any]]:

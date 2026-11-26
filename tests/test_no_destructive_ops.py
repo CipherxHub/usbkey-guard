@@ -1,4 +1,4 @@
-﻿r"""Source-level guard: no destructive ops on protected/user data."""
+r"""Source-level guard: no destructive ops on protected/user data."""
 import re
 from pathlib import Path
 
@@ -19,8 +19,10 @@ FORBIDDEN = [
 ]
 
 ALLOWED_EXCEPTIONS = {
-    # vault.py deletes only hash-verified plaintext inside its working folder.
-    "vault.py": {"remove", "unlink"},
+    # vault.py deletes only hash-verified plaintext inside its working folder,
+    # plus the empty folders it created for its own ciphertext (rmdir refuses
+    # to remove anything that is not empty).
+    "vault.py": {"remove", "unlink", "rmdir"},
     # tui.py may replace its own key.dat on the enrolled stick.
     "tui.py": {"unlink"},
     # setup_app.py removes only its own Program Files copy and Start menu entry.

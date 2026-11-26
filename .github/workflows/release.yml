@@ -61,6 +61,11 @@ jobs:
             OS-owned paths, reparse points, path traversal and reserved device
             names are refused; a corrupt state file is reported, never reset.
 
+            Stop protecting: `usbkey vault remove --vault-id <id> --yes` (or
+            TUI option 8) decrypts a vault for good and deletes the encrypted
+            copy only after every file is verified on disk. `--keep-ciphertext`
+            keeps the encrypted folder so it can be attached again.
+
   publish-pypi:
     needs: build
     if: vars.PYPI_PUBLISHED != github.ref_name

@@ -282,3 +282,107 @@ def test_vaults_made_before_1_0_2_still_unlock(keyed, tmp_path, monkeypatch):
 
     assert keyed.unlock(m["id"], passphrase="p") == ["a.txt"]
     assert (data / "a.txt").read_text(encoding="utf-8") == "one"
+
+
+# ---------------------------------------------------------------- removing protection
+def test_remove_decrypts_for_good_and_unregisters(keyed, tmp_path):
+    data = _make(tmp_path / "data", {"a.txt": "alpha", "sub/b.txt": "bravo"})
+    vdir = tmp_path / "v"
+    m = keyed.convert(str(data), str(vdir), passphrase="p", yes=True)
+
+    result = keyed.remove(m["id"], passphrase="p", yes=True)
+
+    assert result["deleted_ciphertext"] is True
+    assert result["files"] == 2
+    assert (data / "a.txt").read_text(encoding="utf-8") == "alpha"
+    assert (data / "sub" / "b.txt").read_text(encoding="utf-8") == "bravo"
+    assert not (vdir / "manifest.json").exists()
+    assert not (vdir / "data").exists()
+    assert keyed.list_vaults() == []
+
+
+def test_remove_works_on_a_locked_vault(keyed, tmp_path):
+    data = _make(tmp_path / "data", {"a.txt": "alpha"})
+    m = keyed.convert(str(data), str(tmp_path / "v"), passphrase="p", yes=True)
+    assert not (data / "a.txt").exists()
+
+    keyed.remove(m["id"], passphrase="p", yes=True)
+    assert (data / "a.txt").read_text(encoding="utf-8") == "alpha"
+
+
+def test_remove_requires_explicit_yes(keyed, tmp_path):
+    data = _make(tmp_path / "data", {"a.txt": "alpha"})
+    m = keyed.convert(str(data), str(tmp_path / "v"), passphrase="p", yes=True)
+
+    with pytest.raises(PermissionError, match="--yes"):
+        keyed.remove(m["id"], passphrase="p")
+    assert len(keyed.list_vaults()) == 1
+    assert (tmp_path / "v" / "manifest.json").exists()
+
+
+def test_remove_keeps_ciphertext_when_asked(keyed, tmp_path):
+    data = _make(tmp_path / "data", {"a.txt": "alpha"})
+    vdir = tmp_path / "v"
+    m = keyed.convert(str(data), str(vdir), passphrase="p", yes=True)
+
+    result = keyed.remove(m["id"], passphrase="p", yes=True, keep_ciphertext=True)
+    assert result["deleted_ciphertext"] is False
+    assert (vdir / "manifest.json").exists()
+    assert (data / "a.txt").read_text(encoding="utf-8") == "alpha"
+    assert keyed.list_vaults() == []
+    # It can be attached again later, exactly like any other vault folder.
+    assert keyed.attach(str(vdir))["id"] == m["id"]
+
+
+def test_remove_refuses_when_a_file_was_edited_after_unlock(keyed, tmp_path):
+    data = _make(tmp_path / "data", {"a.txt": "alpha"})
+    vdir = tmp_path / "v"
+    m = keyed.convert(str(data), str(vdir), passphrase="p", yes=True)
+    keyed.unlock(m["id"], passphrase="p")
+    (data / "a.txt").write_text("my newer edit", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="refusing to overwrite"):
+        keyed.remove(m["id"], passphrase="p", yes=True)
+
+    # Nothing was changed: the edit survives, the vault is still registered.
+    assert (data / "a.txt").read_text(encoding="utf-8") == "my newer edit"
+    assert (vdir / "manifest.json").exists()
+    assert [v["id"] for v in keyed.list_vaults()] == [m["id"]]
+
+
+def test_remove_requires_the_usb_key(keyed, tmp_path, monkeypatch):
+    data = _make(tmp_path / "data", {"a.txt": "alpha"})
+    vdir = tmp_path / "v"
+    m = keyed.convert(str(data), str(vdir), passphrase="p", yes=True)
+
+    def no_stick():
+        raise PermissionError("USB key not present")
+
+    monkeypatch.setattr(keyed, "_usb_material", no_stick)
+    with pytest.raises(PermissionError, match="USB key not present"):
+        keyed.remove(m["id"], passphrase="p", yes=True)
+
+    assert (vdir / "manifest.json").exists()
+    assert len(keyed.list_vaults()) == 1
+
+
+def test_remove_unknown_vault_changes_nothing(keyed, tmp_path):
+    with pytest.raises(ValueError, match="unknown vault"):
+        keyed.remove("doesnotexist", passphrase="p", yes=True)
+    assert keyed.list_vaults() == []
+
+def test_remove_leaves_unrelated_files_in_the_vault_folder(keyed, tmp_path):
+    data = _make(tmp_path / "data", {"a.txt": "alpha"})
+    vdir = tmp_path / "v"
+    m = keyed.convert(str(data), str(vdir), passphrase="p", yes=True)
+    stray = vdir / "notes-from-me.txt"
+    stray.write_text("keep me", encoding="utf-8")
+
+    result = keyed.remove(m["id"], passphrase="p", yes=True)
+
+    assert stray.read_text(encoding="utf-8") == "keep me"
+    # The folder is not empty any more, so it is kept rather than deleted.
+    assert vdir.is_dir()
+    assert not (vdir / "manifest.json").exists()
+    assert not (vdir / "data" / "00000.enc").exists()
+    assert result["deleted_ciphertext"] is True
