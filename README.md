@@ -4,29 +4,35 @@ Headless Windows tool that keeps files locked unless a specific USB stick is ins
 Files are encrypted with AES-GCM, so even an administrator cannot read them without
 the USB key **and** your passphrase.
 
-Interactive TUI: `usbkey-tui`
+Interactive menu: `python -m usbkey_guard` (also `usbkey-tui`)
 Scriptable CLI: `usbkey`
 
 ## Quick start
 
 ```powershell
-pip install usbkey-guard
-usbkey-tui
+pip install -U usbkey-guard
+python -m usbkey_guard
 ```
+
+That is all. On first start the menu offers the one-time Administrator step —
+press Enter, approve UAC, reopen the menu. It installs the all-users Start menu
+entry and the background service that re-encrypts folders when the stick is
+pulled. No separate setup command.
 
 To install from a downloaded source zip instead:
 
 ```powershell
 cd <extracted source folder>
 pip install .
-usbkey-tui
+python -m usbkey_guard
 ```
 
-The TUI walks you through:
-1. selecting and enrolling a USB drive,
-2. choosing a file or folder to encrypt,
-3. setting a passphrase,
-4. unlocking later with the stick + passphrase.
+The menu walks you through:
+1. accepting the Administrator step (once per PC),
+2. selecting and enrolling a USB drive,
+3. choosing a file or folder to encrypt,
+4. setting a passphrase,
+5. unlocking later with the stick + passphrase.
 
 Menu option 11 removes the tool from the PC in one step; it refuses while a
 vault is still registered, so encrypted data can never be stranded.

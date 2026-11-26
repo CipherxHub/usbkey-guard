@@ -362,7 +362,7 @@ def cmd_gate(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="usbkey", description="USB-key-gated encrypted vault")
-    sub = p.add_subparsers(dest="command", required=True)
+    sub = p.add_subparsers(dest="command", required=False)
 
     sub.add_parser("doctor").set_defaults(func=cmd_doctor)
     sub.add_parser("status").set_defaults(func=cmd_status)
@@ -445,6 +445,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if not getattr(args, "func", None):
+        # `python -m usbkey_guard` with no arguments opens the menu; nobody
+        # should have to remember the module name of the TUI.
+        from .tui import main as tui_main
+        return tui_main()
     try:
         return int(args.func(args))
     except UsbKeyError as exc:

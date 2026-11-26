@@ -14,9 +14,11 @@ import time
 from pathlib import Path
 
 from . import acl, config, paths
+from . import __version__
 
 ENFORCER_BOOTSTRAP = "run_enforcer.py"
 TUI_BOOTSTRAP = "run_tui.py"
+VERSION_MARKER = "VERSION"
 
 _ENFORCER_SOURCE = """\
 import sys
@@ -52,7 +54,26 @@ except OSError:
     pass
 
 print()
-input("Press Enter to close this window... ")
+try:
+    input("Press Enter to close this window... ")
+except EOFError:
+    pass
+sys.exit(rc)
+"""
+
+_INSTALL_HELPER = """\
+import sys
+
+sys.path.insert(0, {root!r})
+from usbkey_guard.setup_app import main
+
+rc = main(["install"])
+
+print()
+try:
+    input("Press Enter to close this window... ")
+except EOFError:
+    pass
 sys.exit(rc)
 """
 
@@ -177,7 +198,13 @@ def harden_state() -> bool:
 
 def install() -> int:
     if not is_admin():
-        print("ERROR: run this as Administrator.")
+        print("Installing for all users needs Administrator rights: the Program")
+        print("Files copy, the Start menu entry and the SYSTEM service.")
+        if elevate_install():
+            print("A separate Administrator window is finishing the install.")
+            return 0
+        print("Could not elevate. Run this from an Administrator prompt:")
+        print("  python -m usbkey_guard.setup_app install")
         return 1
     source = Path(config.PACKAGE_ROOT).resolve()
     dest = Path(config.INSTALL_ROOT).resolve()
@@ -194,6 +221,7 @@ def install() -> int:
             print("Files installed to", pkg_dest)
         _write_bootstrap(ENFORCER_BOOTSTRAP, _ENFORCER_SOURCE.format(install=str(dest)))
         _write_bootstrap(TUI_BOOTSTRAP, _TUI_SOURCE.format(install=str(dest)))
+        (dest / VERSION_MARKER).write_text(__version__ + "\n", encoding="utf-8")
     except OSError as exc:
         print("ERROR copying files:", exc)
         return 1
@@ -330,19 +358,10 @@ def _remove_desktop_shortcut() -> None:
         print("WARNING: could not remove the desktop shortcut:", exc)
 
 
-def elevate_uninstall() -> bool:
-    """Ask Windows for elevation and finish the removal in its own console.
-
-    The TUI runs unelevated; deleting the SYSTEM task and Program Files needs an
-    administrator. UAC keeps the same user, so the helper can also uninstall the
-    pip package from that user's site-packages.
-    """
-    helper = Path(tempfile.gettempdir()) / "usbkey-uninstall.py"
+def _run_elevated(source: str, name: str) -> bool:
+    helper = Path(tempfile.gettempdir()) / name
     try:
-        helper.write_text(
-            _UNINSTALL_HELPER.format(install=str(config.INSTALL_ROOT)),
-            encoding="utf-8",
-        )
+        helper.write_text(source, encoding="utf-8")
     except OSError as exc:
         print("could not write the helper script:", exc)
         return False
@@ -356,6 +375,24 @@ def elevate_uninstall() -> bool:
         print("Windows refused to elevate (code", rc, ").")
         return False
     return True
+
+
+def elevate_install() -> bool:
+    """Run `install` elevated, importing the package this process is using."""
+    root = str(Path(config.PACKAGE_ROOT).parent)
+    return _run_elevated(_INSTALL_HELPER.format(root=root), "usbkey-install.py")
+
+
+def elevate_uninstall() -> bool:
+    """Ask Windows for elevation and finish the removal in its own console.
+
+    The TUI runs unelevated; deleting the SYSTEM task and Program Files needs an
+    administrator. UAC keeps the same user, so the helper can also uninstall the
+    pip package from that user's site-packages.
+    """
+    return _run_elevated(
+        _UNINSTALL_HELPER.format(install=str(config.INSTALL_ROOT)),
+        "usbkey-uninstall.py")
 
 
 def uninstall(purge: bool = False) -> int:

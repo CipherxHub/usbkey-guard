@@ -4,6 +4,7 @@ import ntpath
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import win32api
@@ -11,6 +12,7 @@ import win32con
 import win32file
 
 from . import config, enforce, keystore, setup_app, vault
+from . import __version__ as VERSION
 
 DRIVE_TYPES = {
     win32con.DRIVE_UNKNOWN: "unknown",
@@ -381,12 +383,69 @@ def do_export() -> None:
     pause()
 
 
+def service_issue() -> str:
+    """Empty when the installed copy is current and its service is running."""
+    try:
+        installed = (Path(config.INSTALL_ROOT) / setup_app.VERSION_MARKER).read_text(
+            encoding="utf-8").strip()
+    except OSError:
+        installed = ""
+    if not installed:
+        return "the system copy on this PC is missing or older than this version"
+    if installed != VERSION:
+        return f"the system copy is {installed}, this is {VERSION}"
+    if not setup_app._task_running():
+        return "the background service is not running"
+    return ""
+
+
+def _wait_for_install(timeout: float = 120.0) -> bool:
+    """The elevated window writes VERSION last; wait for it, then carry on."""
+    marker = Path(config.INSTALL_ROOT) / setup_app.VERSION_MARKER
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if marker.is_file():
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def offer_service_setup() -> bool:
+    """Offer the one-time Administrator step. True when the caller must stop."""
+    issue = service_issue()
+    if not issue:
+        return False
+    clear()
+    heading("BACKGROUND SERVICE")
+    print("usbkey:", issue + ".")
+    print("Without it, pulling the USB stick will not re-encrypt unlocked folders.")
+    print("Windows will ask for Administrator permission.\n")
+    if ask("Set it up now? [Y/n]: ").lower() not in ("", "y", "yes"):
+        print("Skipped. Menu option 9 sets it up later.")
+        pause()
+        return False
+    if not setup_app.elevate_install():
+        print("\nCould not elevate. Run this in an Administrator PowerShell:")
+        print("  python -m usbkey_guard.setup_app install")
+        pause()
+        return False
+    print("\nAn Administrator window is installing it. Waiting...")
+    if _wait_for_install():
+        print("Installed. The menu continues below.")
+        pause()
+        return False
+    print("\nStill installing. Reopen usbkey when that window finishes.")
+    return True
+
+
 def _main() -> int:
     if not enforce.load_config().get("identity"):
         clear()
         heading("FIRST RUN - USB KEY SETUP")
         print("No USB key has been enrolled yet. Let's select one.")
         do_enroll()
+    if offer_service_setup():
+        return 0
     while True:
         clear()
         heading("MAIN MENU")

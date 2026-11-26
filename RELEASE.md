@@ -1,10 +1,12 @@
 # Release build notes
 
-Package: `usbkey-guard` 1.0.8 (pip-installable, Windows only)
+Package: `usbkey-guard` 1.0.9 (pip-installable, Windows only)
 
 ## What is included
 
 - `src/usbkey_guard/` - all runtime modules, no hardcoded machine paths
+- `python -m usbkey_guard` opens the menu; the same module offers the one-time
+  Administrator step on first start, so there is no second command to remember
 - TUI with first-run USB drive selection, encryption, unlock, lock, verify,
   attach-existing-vault (with a restore-folder override), second-PC key adopt,
   stop-protecting, service control, recovery export and complete removal
@@ -14,16 +16,17 @@ Package: `usbkey-guard` 1.0.8 (pip-installable, Windows only)
   started), state-folder permissions, `uninstall --purge` for a full removal
 - `config.py` - all paths overridable by `USBKEY_STATE` / `USBKEY_INSTALL`
 - `README.md`, `INSTALL.md`, `QUICKSTART.md`, `LIMITATIONS.md`, `LICENSE`
-- 92 automated tests including source-level no-destructive guard, crash replay,
+- 107 automated tests including source-level no-destructive guard, crash replay,
   unique vault IDs, path/manifest traversal, all-or-nothing unlock, verified
   unprotect, second-PC key adopt, state-permission repair, service start and
-  interpreter checks, removal safety, corrupt-state handling, the installed-copy
+  interpreter checks, removal safety, the first-run service offer, the
+  no-argument menu entry point, corrupt-state handling, the installed-copy
   import layout and the Start menu launcher encoding
 
 ## Verified
 
 - `pip install -e .` succeeds
-- `python -m pytest tests -q` -> 92 passed
+- `python -m pytest tests -q` -> 107 passed
 - `python -m usbkey_guard --help` works
 - convert -> verify -> unlock -> lock round trip, including empty folders, a
   modified file that must survive locking, and a vault released back to
@@ -32,6 +35,20 @@ Package: `usbkey-guard` 1.0.8 (pip-installable, Windows only)
 - attach --work-dir restores a vault made on another machine into a new folder
 - manifests written by 1.0.1 (no `kdf` key) still unlock
 - TUI first-run correctly detects a removable drive and offers it for enrollment
+
+## Added in 1.0.9
+
+- `python -m usbkey_guard` with no arguments now opens the menu instead of
+  printing argparse usage.
+- First start offers the Administrator step itself: "Set it up now? [Y/n]" →
+  UAC → the system copy, Start menu entry and service are installed in a
+  separate window. The install no longer needs a remembered second command.
+- The installed copy writes a `VERSION` marker. The menu compares it with the
+  running package, so after `pip install -U usbkey-guard` it offers to refresh
+  the system copy instead of silently running the old service. A missing marker
+  (any 1.0.8 or older install) counts as out of date.
+- `setup_app.install()` can elevate itself; non-admin runs print the exact
+  Administrator command only if UAC is refused.
 
 ## Added in 1.0.8
 

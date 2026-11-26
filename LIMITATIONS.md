@@ -19,9 +19,11 @@
 ## Locking depends on the background service
 
 Encrypting on demand works from the TUI alone, but re-locking after the stick is
-pulled is done by `usbkey-enforcer`, a SYSTEM scheduled task created by
-`usbkey-setup install`. Without it, an unlocked folder stays readable. Check with
-`usbkey-setup status` (`Service: running`) and `usbkey status`.
+pulled is done by `usbkey-enforcer`, a SYSTEM scheduled task installed by the
+one-time Administrator step the menu offers on first start (or explicitly by
+`python -m usbkey_guard.setup_app install`). Without it, an unlocked folder stays
+readable. Check with `python -m usbkey_guard.setup_app status`
+(`Service: running`) and `python -m usbkey_guard status`.
 
 The task runs the Python that performed the install. If that Python is inside a
 user profile, only that account can start the TUI from the Start menu; the

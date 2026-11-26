@@ -212,3 +212,41 @@ def test_elevate_uninstall_reports_success(tmp_path, monkeypatch):
     monkeypatch.setattr(sa.tempfile, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(sa.ctypes, "windll", types.SimpleNamespace(shell32=Shell()))
     assert sa.elevate_uninstall() is True
+
+
+def test_install_writes_a_version_marker(fake_install):
+    install, _ = fake_install
+    sa.install()
+    marker = (install / sa.VERSION_MARKER).read_text(encoding="utf-8").strip()
+    assert marker == sa.__version__
+
+
+def test_install_offers_elevation_when_not_admin(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(sa, "is_admin", lambda: False)
+    monkeypatch.setattr(sa, "elevate_install",
+                        lambda: calls.append("elevate") or True)
+    monkeypatch.setattr(sa.config, "INSTALL_ROOT", tmp_path / "Program Files" / "usbkey")
+    assert sa.install() == 0
+    assert calls == ["elevate"]
+    assert not (tmp_path / "Program Files" / "usbkey").exists()
+
+
+def test_install_reports_when_elevation_fails(monkeypatch, capsys):
+    monkeypatch.setattr(sa, "is_admin", lambda: False)
+    monkeypatch.setattr(sa, "elevate_install", lambda: False)
+    assert sa.install() == 1
+    assert "Administrator prompt" in capsys.readouterr().out
+
+
+def test_elevate_install_writes_a_helper_that_imports_this_package(tmp_path, monkeypatch):
+    class Shell:
+        def ShellExecuteW(self, *args):
+            return 42
+
+    monkeypatch.setattr(sa.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(sa.ctypes, "windll", types.SimpleNamespace(shell32=Shell()))
+    assert sa.elevate_install() is True
+    helper = (tmp_path / "usbkey-install.py").read_text(encoding="utf-8")
+    assert repr(str(Path(sa.config.PACKAGE_ROOT).parent)) in helper
+    assert '"install"' in helper

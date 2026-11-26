@@ -55,6 +55,14 @@ jobs:
             Included: interactive TUI, scriptable CLI, all-users installer,
             SYSTEM background enforcer, recovery tools and documentation.
 
+            Install in 1.0.9: `pip install -U usbkey-guard`, then
+            `python -m usbkey_guard`. The menu offers the one-time Administrator
+            step itself (UAC, then a separate window installs the system copy,
+            Start menu entry and service), so there is no second command to
+            remember. `python -m usbkey_guard` with no arguments is the menu.
+            After an upgrade it compares the installed copy's VERSION marker with
+            the running package and offers to refresh it.
+
             Safety: ciphertext is flushed and verified before any plaintext is
             removed; unlock is all-or-nothing and refuses to overwrite a file
             that differs from the vault; lock keeps files edited since unlock;

@@ -9,29 +9,50 @@
 ## Install
 
 ```powershell
-pip install usbkey-guard
-usbkey-setup install
+pip install -U usbkey-guard
+python -m usbkey_guard
 ```
 
-Installing from a downloaded source zip works too:
+That is the whole install. The menu does the rest: on first start it offers the
+one-time Administrator step
+
+```
+usbkey: the background service is not installed on this PC.
+Without it, pulling the USB stick will not re-encrypt unlocked folders.
+Windows will ask for Administrator permission.
+
+Set it up now? [Y/n]:
+```
+
+Press Enter, approve the UAC prompt, and a separate window finishes the
+machine-wide part. Reopen `python -m usbkey_guard` when it says so. No second
+command to remember, and no separate `usbkey-setup install` step.
+
+You only need the manual form if you decline that prompt, or if the automatic
+step is blocked by policy:
+
+```powershell
+# Administrator PowerShell
+python -m usbkey_guard.setup_app install
+```
+
+Installing from a downloaded source zip works the same way:
 
 ```powershell
 cd <extracted source folder>
 pip install .
-usbkey-setup install
+python -m usbkey_guard
 ```
 
-Either form registers `usbkey`, `usbkey-tui` and `usbkey-setup`.
-
-If PowerShell says `The term 'usbkey' is not recognized`, the package is
-installed but pip's `Scripts` folder is not on `PATH`. This is normal with the
-new Python install manager (`%LOCALAPPDATA%\Python\pythoncore-*`), which only
-puts `python` itself on `PATH`. Use the module forms, which are equivalent:
+`python -m usbkey_guard` with no arguments opens the menu. `usbkey`,
+`usbkey-tui` and `usbkey-setup` are also registered when pip's `Scripts` folder
+is on `PATH`; if PowerShell says `The term 'usbkey' is not recognized`, the
+package is installed but that folder is not on `PATH` (normal with the new
+Python install manager). The module forms always work:
 
 ```powershell
-python -m usbkey_guard --help
-python -m usbkey_guard.tui
-python -m usbkey_guard.setup_app install
+python -m usbkey_guard
+python -m usbkey_guard.setup_app status
 ```
 
 To get the short commands instead, add pip's script folder to your user `PATH`
@@ -43,7 +64,8 @@ $scripts = python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
     'Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + $scripts, 'User')
 ```
 
-`usbkey-setup install` must run **as Administrator**. It:
+The Administrator step (automatic on first start, or
+`python -m usbkey_guard.setup_app install`):
 - copies the package to `C:\Program Files\usbkey\usbkey_guard`
 - adds an all-users Start menu entry named `usbkey TUI`
 - creates the SYSTEM scheduled task `usbkey-enforcer` and starts it immediately
@@ -61,12 +83,12 @@ One caveat: both point at the Python that ran the install. If that Python is in 
 user profile (`C:\Users\<name>\...`, which is where the new Python install manager
 puts it), the Start menu entry works only for that account. Install Python from
 python.org with **Install for all users** (`C:\Program Files\Python312`) when the
-PC is shared. `usbkey-setup install` prints a note when it detects this, and
-`usbkey-setup status` shows the interpreter, whether other users can use it, and
-whether the service is running.
+PC is shared. The menu warns when it detects this, and `python -m
+usbkey_guard.setup_app status` shows the interpreter, whether other users can use
+it, and whether the service is running.
 
 ```powershell
-usbkey-setup status
+python -m usbkey_guard.setup_app status
 ```
 
 State (identity, vault manifests, journal, logs) lives in `C:\ProgramData\usbkey`.
@@ -81,28 +103,28 @@ If your organisation blocks generated `.exe` launchers (Application Control / WD
 module forms instead — they are equivalent:
 
 ```powershell
-python -m usbkey_guard --help
-python -m usbkey_guard.tui
-python -c "from usbkey_guard.setup_app import install; install()"
+python -m usbkey_guard
+python -m usbkey_guard.setup_app status
 ```
 
 ## First run
 
 ```powershell
-usbkey-tui
+python -m usbkey_guard
 ```
 
-If no key is enrolled, the TUI immediately shows a drive list. Pick the USB stick.
-Input a passphrase when creating your first vault and **write it down** — it is never stored.
+The menu offers the Administrator step first (see above), then shows a drive
+list if no key is enrolled. Pick the USB stick. Input a passphrase when creating
+your first vault and **write it down** — it is never stored.
 
 ## Using the same stick on a second PC (laptop)
 
-Install the same way on the laptop (`pip install usbkey-guard`, then
-`usbkey-setup install` as Administrator), then:
+Install the same way on the laptop (`pip install -U usbkey-guard`, then
+`python -m usbkey_guard` and accept the Administrator prompt), then:
 
 1. Plug in the stick that already holds `key.dat`.
-2. Run `usbkey-tui`. It finds the existing key file and offers **USE** or
-   **OVERWRITE**. Choose **USE**.
+2. Run `python -m usbkey_guard`. It finds the existing key file and offers
+   **USE** or **OVERWRITE**. Choose **USE**.
    - `USE` registers the stick on this PC and leaves `key.dat` untouched, so
      every vault made with it stays readable.
    - `OVERWRITE` creates a new key and permanently locks the old vaults. Do not
@@ -115,8 +137,8 @@ Install the same way on the laptop (`pip install usbkey-guard`, then
    ```
    `--work-dir` is the folder to restore into on this machine. Without it the
    path recorded in the manifest is used, which may not exist here.
-4. Run `usbkey-setup install` once, so the laptop's background task watches the
-   stick too.
+4. Accept the Administrator prompt on the laptop's first start, so its
+   background task watches the stick too.
 
 Nothing secret is copied between machines: the vault key is derived from the
 passphrase, the stick's secret and that stick's volume identity. Copying
@@ -127,14 +149,14 @@ passphrase, the stick's secret and that stick's volume identity. Copying
 Locking is done by the background service, not by the TUI. Two checks:
 
 ```powershell
-usbkey-setup status
-usbkey status
+python -m usbkey_guard.setup_app status
+python -m usbkey_guard status
 ```
 
-`usbkey-setup status` must print `Service: running`. If it says `NOT running`,
-the service is not watching the stick, so nothing will be re-encrypted: run
-`usbkey-setup install` again as Administrator (it starts the task) or reboot.
-`usbkey status` must list the vault you expect.
+`... setup_app status` must print `Service: running`. If it says `NOT running`,
+the service is not watching the stick, so nothing will be re-encrypted: open
+`python -m usbkey_guard`, choose **9) Background service → 2) Install / repair**,
+or reboot. `usbkey status` must list the vault you expect.
 
 The service also waits `grace_seconds` after the stick disappears (3 by default)
 before locking, and it skips a vault whose plaintext folder is missing.
