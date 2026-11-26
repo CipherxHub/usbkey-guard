@@ -386,3 +386,47 @@ def test_remove_leaves_unrelated_files_in_the_vault_folder(keyed, tmp_path):
     assert not (vdir / "manifest.json").exists()
     assert not (vdir / "data" / "00000.enc").exists()
     assert result["deleted_ciphertext"] is True
+
+
+# ---------------------------------------------------------------- second machine
+def test_attach_can_restore_to_a_different_folder(keyed, tmp_path):
+    data = _make(tmp_path / "desktop" / "Bank", {"a.txt": "alpha"})
+    m = keyed.convert(str(data), str(tmp_path / "vault"), passphrase="p", yes=True)
+
+    # A fresh state, as if this were a second PC.
+    (tmp_path / "vaults.json").unlink()
+    new_home = tmp_path / "laptop" / "Bank"
+    keyed.attach(str(tmp_path / "vault"), work_dir=str(new_home))
+
+    reg = keyed.list_vaults()[0]
+    assert reg["id"] == m["id"]
+    assert Path(reg["work_dir"]) == new_home
+    assert reg["source_file"] is None
+    assert reg["original_work_dir"] == str(tmp_path / "desktop" / "Bank")
+
+    keyed.unlock(m["id"], passphrase="p")
+    assert (new_home / "a.txt").read_text(encoding="utf-8") == "alpha"
+    assert not (data / "a.txt").exists()
+
+
+def test_attach_workdir_refuses_system_paths(keyed, tmp_path, monkeypatch):
+    data = _make(tmp_path / "data", {"a.txt": "a"})
+    keyed.convert(str(data), str(tmp_path / "v"), passphrase="p", yes=True)
+    (tmp_path / "vaults.json").unlink()
+
+    fake = tmp_path / "fake-windows"
+    fake.mkdir()
+    monkeypatch.setattr(paths, "_system_prefixes", lambda: [paths.norm(fake)])
+    with pytest.raises(ValueError, match="protected system path"):
+        keyed.attach(str(tmp_path / "v"), work_dir=str(fake / "out"))
+
+
+def test_attach_without_override_keeps_the_manifest_path(keyed, tmp_path):
+    data = _make(tmp_path / "data", {"a.txt": "a"})
+    m = keyed.convert(str(data), str(tmp_path / "v"), passphrase="p", yes=True)
+    (tmp_path / "vaults.json").unlink()
+
+    keyed.attach(str(tmp_path / "v"))
+    reg = keyed.list_vaults()[0]
+    assert Path(reg["work_dir"]) == data
+    assert reg["original_work_dir"] == m["work_dir"]

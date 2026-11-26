@@ -43,6 +43,11 @@ overwriting it, because the old key is the only thing that can decrypt vaults ma
 The previous file is copied to `%PROGRAMDATA%\usbkey\keystore-backup` first, but that copy
 only helps if you put it back on the same stick.
 
+On a second PC, **adopt** the existing key instead of overwriting it: `USE` in the TUI, or
+`usbkey enroll --drive E:\ --use-existing`. That registers the stick locally without
+touching `key.dat`, so vaults made on the first machine stay readable. Copying `key.dat`
+to a different stick never works, because the key is bound to the original volume identity.
+
 ## State folder
 
 `%PROGRAMDATA%\usbkey` holds only metadata: volume identity, vault paths, salts, hashes and

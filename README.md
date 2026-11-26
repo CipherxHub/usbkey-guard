@@ -65,5 +65,12 @@ usbkey vault remove --vault-id <id> --yes      # decrypt for good, stop protecti
 usbkey export-recovery D:\Recovery
 ```
 
+Second PC with the same stick:
+
+```powershell
+usbkey enroll --drive E:\ --use-existing       # keeps key.dat, old vaults stay readable
+usbkey vault attach --vault-dir D:\Private.vault --work-dir C:\Users\me\Private
+```
+
 Prefer the hidden prompt. `--passphrase-stdin` reads one line from stdin for scripts;
 `--passphrase` still works but is visible to other users in the process list.

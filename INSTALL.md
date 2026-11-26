@@ -58,6 +58,33 @@ usbkey-tui
 If no key is enrolled, the TUI immediately shows a drive list. Pick the USB stick.
 Input a passphrase when creating your first vault and **write it down** — it is never stored.
 
+## Using the same stick on a second PC (laptop)
+
+Install the same way on the laptop (`pip install usbkey-guard`, then
+`usbkey-setup install` as Administrator), then:
+
+1. Plug in the stick that already holds `key.dat`.
+2. Run `usbkey-tui`. It finds the existing key file and offers **USE** or
+   **OVERWRITE**. Choose **USE**.
+   - `USE` registers the stick on this PC and leaves `key.dat` untouched, so
+     every vault made with it stays readable.
+   - `OVERWRITE` creates a new key and permanently locks the old vaults. Do not
+     choose it unless you mean it.
+   - CLI equivalent: `usbkey enroll --drive E:\ --use-existing`
+3. Copy the encrypted vault folder to the laptop (or use a drive it can see), then:
+   ```powershell
+   usbkey vault attach --vault-dir D:\Bank.vault --work-dir C:\Users\me\Bank
+   usbkey vault unlock --vault-id <id>
+   ```
+   `--work-dir` is the folder to restore into on this machine. Without it the
+   path recorded in the manifest is used, which may not exist here.
+4. Run `usbkey-setup install` once, so the laptop's background task watches the
+   stick too.
+
+Nothing secret is copied between machines: the vault key is derived from the
+passphrase, the stick's secret and that stick's volume identity. Copying
+`key.dat` to a different stick does not work.
+
 ## Uninstall
 
 ```powershell

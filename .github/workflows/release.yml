@@ -66,6 +66,11 @@ jobs:
             copy only after every file is verified on disk. `--keep-ciphertext`
             keeps the encrypted folder so it can be attached again.
 
+            Second PC: install the same package there, plug in the same stick
+            and choose USE (or `usbkey enroll --drive E:\ --use-existing`) so
+            the existing key.dat is kept, then attach the vault with
+            `--work-dir` to pick the restore folder on that machine.
+
   publish-pypi:
     needs: build
     if: vars.PYPI_PUBLISHED != github.ref_name

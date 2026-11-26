@@ -101,6 +101,42 @@ def enroll(drive: str, replace: bool = False) -> dict[str, Any]:
     return {"identity": ident, "key_file": str(path), "previous_key_backup": backup}
 
 
+def adopt(drive: str) -> dict[str, Any]:
+    """Register a stick that already carries key.dat, without rewriting it.
+
+    This is the second-machine path: the file was created here or on another
+    PC, and overwriting it would lock every vault made with that key.
+    """
+    ident = drive_identity(drive)
+    path = Path(ident["drive"]) / KEY_NAME
+    if not path.is_file():
+        raise FileNotFoundError(
+            "no " + KEY_NAME + " on " + str(path)
+            + "; plug in the stick you already enrolled, or enroll a new one"
+        )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError("key file is unreadable: " + str(path)) from exc
+    if not isinstance(payload, dict) or payload.get("v") != 1:
+        raise ValueError("unsupported key file format: " + str(path))
+    if (payload.get("volume_guid") != ident["volume_guid"]
+            or str(payload.get("serial")) != ident["serial"]):
+        raise ValueError(
+            "that key file was copied from a different stick; use the original "
+            "stick (the key is bound to its volume identity)"
+        )
+    try:
+        derived = _derive(payload["secret"], ident, bytes.fromhex(payload["salt"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("key file is damaged: " + str(path)) from exc
+    computed = hmac.new(derived, b"usbkey-presence-v1", hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(computed, str(payload.get("verifier", ""))):
+        raise ValueError("key file failed its integrity check: " + str(path))
+    _log.info("adopted existing stick %s serial=%s", ident["drive"], redact(ident["serial"]))
+    return {"identity": ident, "key_file": str(path), "previous_key_backup": None}
+
+
 def verify(drive: str, expected: dict[str, str]) -> bool:
     try:
         ident = drive_identity(drive)

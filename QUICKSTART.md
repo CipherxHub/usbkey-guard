@@ -27,6 +27,17 @@ To stop protecting something you no longer need, use **8) Stop protecting a vaul
 leaves ordinary files you can delete normally. ACL-protected folders come out with
 `usbkey protect remove <path>` after unlocking them.
 
+## Moving to a laptop
+
+1. Install there: `pip install usbkey-guard`, then `usbkey-setup install` as Administrator.
+2. Plug in the same stick and run `usbkey-tui`. When it finds the existing key file,
+   choose **USE** — never **OVERWRITE**, which would lock your old vaults for good.
+3. Copy the encrypted folder over, then
+   `usbkey vault attach --vault-dir D:\Private.vault --work-dir C:\Users\me\Private`
+   and unlock with your passphrase.
+
+The stick works on both machines; nothing secret is copied between them.
+
 ## If something goes wrong
 
 - Wrong passphrase → refused with a clear message, nothing is written.

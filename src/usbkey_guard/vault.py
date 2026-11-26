@@ -539,8 +539,12 @@ def verify(vault_id: str | dict[str, Any] | None = None) -> list[str]:
     return problems
 
 
-def attach(vault_dir: str) -> dict[str, Any]:
-    """Register an existing encrypted folder (recovery / reinstall)."""
+def attach(vault_dir: str, work_dir: str | None = None) -> dict[str, Any]:
+    """Register an existing encrypted folder (recovery / reinstall / new PC).
+
+    `work_dir` overrides the folder recorded in the manifest, so a vault made on
+    another machine can be restored somewhere that exists here.
+    """
     vd = Path(os.path.abspath(str(vault_dir)))
     if not (vd / "manifest.json").is_file():
         raise ValueError(
@@ -548,20 +552,22 @@ def attach(vault_dir: str) -> dict[str, Any]:
         )
     m = _manifest({"vault_dir": str(vd)})
     # The manifest is only authenticated for the file contents, not for the
-    # folder it restores into, so validate it before registering.
-    paths.safe_vault_workdir(m["work_dir"])
-    work = Path(m["work_dir"])
+    # folder it restores into, so validate the chosen folder before registering.
+    target = Path(os.path.abspath(str(work_dir))) if work_dir else Path(m["work_dir"])
+    paths.safe_vault_workdir(str(target))
     for entry in m["files"]:
-        _safe_join(work, entry["rel"])
+        _safe_join(target, entry["rel"])
         _enc_path({"vault_dir": str(vd)}, entry["enc"])
     cfg = _read_config()
     if any(v.get("id") == m["id"] for v in cfg["vaults"]):
         raise ValueError("vault already registered: " + m["id"])
     cfg["vaults"].append({
         "id": m["id"],
-        "work_dir": m["work_dir"],
+        "work_dir": str(target),
         "vault_dir": str(vd),
-        "source_file": m.get("source_file"),
+        # Provenance only; status() falls back to work_dir when it is absent.
+        "source_file": m.get("source_file") if work_dir is None else None,
+        "original_work_dir": m["work_dir"],
     })
     _write_config(cfg)
     return m

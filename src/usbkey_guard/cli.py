@@ -87,14 +87,20 @@ def cmd_status(args) -> int:
 
 def cmd_enroll(args) -> int:
     cfg = enforce.load_config()
-    if cfg.get("identity") and not args.replace:
-        print("Already enrolled. Use --replace to re-enroll (existing vaults must be re-attached).")
+    if cfg.get("identity") and not (args.replace or args.use_existing):
+        print("Already enrolled. Use --use-existing to register the key.dat already on")
+        print("this stick (keeps existing vaults readable), or --replace for a new key.")
         return 1
-    result = keystore.enroll(args.drive, replace=args.replace)
+    result = (keystore.adopt(args.drive) if args.use_existing
+              else keystore.enroll(args.drive, replace=args.replace))
     cfg["identity"] = result["identity"]
     enforce.save_config(cfg)
-    print("Enrolled:", result["identity"])
-    print("Key file:", result["key_file"])
+    if args.use_existing:
+        print("Using the existing key file:", result["key_file"])
+        print("Vaults made with this stick stay readable. Nothing was rewritten.")
+    else:
+        print("Enrolled:", result["identity"])
+        print("Key file:", result["key_file"])
     if result.get("previous_key_backup"):
         print("Previous key backed up to:", result["previous_key_backup"])
     return 0
@@ -233,8 +239,10 @@ def cmd_vault(args) -> int:
         if not args.vault_dir:
             print("--vault-dir is required")
             return 1
-        m = vault.attach(args.vault_dir)
-        print("Attached vault:", m["id"])
+        m = vault.attach(args.vault_dir, work_dir=args.work_dir)
+        reg = next(v for v in vault.list_vaults() if v["id"] == m["id"])
+        print("Attached vault:", m["id"], "->", reg["work_dir"])
+        print("Unlock it with the passphrase to restore the files there.")
         return 0
     if args.action == "status":
         print("\n".join(vault.status()))
@@ -362,6 +370,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     e = sub.add_parser("enroll")
     e.add_argument("--drive", required=True)
+    e.add_argument("--use-existing", action="store_true",
+                   help="register the key.dat already on the stick without rewriting "
+                        "it (use this on a second PC)")
     e.add_argument("--replace", action="store_true")
     e.set_defaults(func=cmd_enroll)
 

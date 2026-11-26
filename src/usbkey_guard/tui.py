@@ -70,7 +70,7 @@ def show_drives() -> list[str]:
 def do_enroll() -> None:
     heading("SELECT USB KEY")
     cfg = enforce.load_config()
-    if cfg.get("identity") and not ask("Already enrolled. Type REPLACE to change: ").upper() == "REPLACE":
+    if cfg.get("identity") and ask("Already enrolled. Type CHANGE to select a different stick: ").upper() != "CHANGE":
         return
     drives = show_drives()
     raw = ask("\nEnter drive number (blank cancels): ")
@@ -83,25 +83,36 @@ def do_enroll() -> None:
             return
     keyfile = Path(drive) / config.KEY_FILENAME
     replace = False
+    adopt = False
     if keyfile.exists():
-        print("\nA key file already exists on this stick.")
-        print("Replacing it makes EVERY vault created with the old key unreadable,")
-        print("even with the correct passphrase. The old file is copied into the")
-        print("state folder first, but that only helps if you put it back on this stick.")
-        if ask("Type OVERWRITE to replace it: ").upper() != "OVERWRITE":
+        print("\nThis stick already has a key file.")
+        print("  USE       keep it - every vault made with this stick stays readable")
+        print("            (this is what you want on a second PC)")
+        print("  OVERWRITE make a brand-new key - every vault made with the old key")
+        print("            becomes unreadable, even with the correct passphrase")
+        choice = ask("Type USE or OVERWRITE: ").upper()
+        if choice == "USE":
+            adopt = True
+        elif choice == "OVERWRITE":
+            replace = True
+        else:
+            print("Cancelled. The key file was not changed.")
             return
-        replace = True
     try:
         cfg = enforce.load_config()
-        result = keystore.enroll(drive, replace=replace)
+        result = (keystore.adopt(drive) if adopt
+                  else keystore.enroll(drive, replace=replace))
         cfg["identity"] = result["identity"]
         enforce.save_config(cfg)
-        print("\nEnrolled:", result["identity"])
-        print("Key file:", result["key_file"])
+        if adopt:
+            print("\nUsing the existing key file:", result["key_file"])
+            print("Vaults made with this stick stay readable. Nothing was rewritten.")
+        else:
+            print("\nEnrolled:", result["identity"])
+            print("Key file:", result["key_file"])
         if result.get("previous_key_backup"):
             print("Previous key backed up to:", result["previous_key_backup"])
-        print("\nIMPORTANT: existing encrypted vaults are bound to the old key.")
-        print("They must be re-created or re-enrolled with the original stick.")
+        print("\nNext: attach your encrypted folder (menu option 7), then unlock it.")
     except Exception as exc:
         print("FAILED:", exc)
     pause()
@@ -283,9 +294,11 @@ def do_attach() -> None:
     p = ask("Path to vault folder (contains manifest.json): ")
     if not p:
         return
+    dest = ask("Restore into (blank keeps the folder recorded in the vault): ")
     try:
-        m = vault.attach(p)
-        print("Attached:", m["id"], "->", m.get("source_file") or m["work_dir"])
+        m = vault.attach(p, work_dir=dest or None)
+        reg = next(v for v in vault.list_vaults() if v["id"] == m["id"])
+        print("Attached:", m["id"], "->", reg["work_dir"])
         print("Now choose Unlock and enter its passphrase.")
     except Exception as exc:
         print("FAILED:", exc)
